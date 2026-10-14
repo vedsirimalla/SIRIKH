@@ -2,6 +2,8 @@
 
 A small expense logger for V and K. It runs from the iPhone home screen, writes each expense to the **Sirikh** tab of our Google Sheet, and keeps a main balance that joint expenses are deducted from.
 
+The site is live at: https://vedsirimalla.github.io/SIRIKH/
+
 ## Features
 
 - **Entry form:** Date (calendar, defaults to today), Category (store name, with suggestions), Amount, Paid By (V or K), Type (Joint or Personal), Notes.
