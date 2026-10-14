@@ -10,26 +10,41 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Sirikh">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="apple-touch-icon" href="icons/icon-180.png">
-  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="icon-192.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header>
     <h1>Sirikh</h1>
-    <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙︎</button>
+    <button id="settingsBtn" class="icon-btn" type="button" aria-label="Settings">⚙︎</button>
   </header>
 
   <main>
-    <div id="banner" class="banner" hidden></div>
+    <div id="banner" class="banner" role="status" hidden></div>
 
-    <form id="expenseForm" autocomplete="off">
+    <section class="card balance-card" aria-labelledby="balanceLabel">
+      <div id="balanceLabel" class="eyebrow">Main balance</div>
+      <div id="balanceAmount" class="balance-amount">—</div>
+      <div id="balanceNote" class="muted"></div>
+      <div id="periodSummary" class="period" hidden>
+        <div id="periodLine1"></div>
+        <div id="periodLine2"></div>
+        <div id="settleLine" class="settle"></div>
+      </div>
+      <div class="row two">
+        <button type="button" id="addFundsBtn">+ Add funds</button>
+        <button type="button" id="setBalanceBtn">Set balance</button>
+      </div>
+    </section>
+
+    <form id="expenseForm" class="card" autocomplete="off" novalidate>
       <label>Date
         <input type="date" id="date" required>
       </label>
 
       <label>Category
-        <input type="text" id="category" list="categoryList" placeholder="Costco, Walmart, Shell…" required autocapitalize="words">
+        <input type="text" id="category" list="categoryList" placeholder="Costco, Walmart, Shell…" autocapitalize="words" required>
         <datalist id="categoryList"></datalist>
       </label>
 
@@ -47,24 +62,65 @@
         </select>
       </label>
 
+      <fieldset class="seg-field">
+        <legend>Type</legend>
+        <div class="seg">
+          <input type="radio" name="type" id="typeJoint" value="Joint" checked>
+          <label for="typeJoint">Joint</label>
+          <input type="radio" name="type" id="typePersonal" value="Personal">
+          <label for="typePersonal">Personal</label>
+        </div>
+        <div id="typeHint" class="muted hint">Joint expenses come out of the main balance.</div>
+      </fieldset>
+
       <label>Notes
         <input type="text" id="notes" placeholder="Milk, bananas, gas…" autocapitalize="sentences">
       </label>
 
-      <button type="submit" id="saveBtn" class="primary">Save expense</button>
+      <button type="submit" id="saveBtn" class="primary big">Save expense</button>
     </form>
 
-    <section>
+    <section class="card">
       <div class="section-head">
         <h2>Recent</h2>
-        <span id="pendingNote" class="muted"></span>
+        <span id="syncNote" class="muted"></span>
       </div>
-      <ul id="recentList" class="recent"><li class="muted">Nothing yet.</li></ul>
+      <ul id="recentList" class="recent"></ul>
     </section>
   </main>
 
+  <dialog id="fundsDialog">
+    <form method="dialog" id="fundsForm" novalidate>
+      <h2 id="fundsTitle">Add funds</h2>
+      <p id="fundsHelp" class="muted"></p>
+      <label>Amount ($)
+        <div class="amount">
+          <span>$</span>
+          <input type="text" id="fundsAmount" inputmode="decimal" placeholder="0.00" required>
+        </div>
+      </label>
+      <label>Added by
+        <select id="fundsPaidBy">
+          <option value="Both">Both</option>
+          <option value="V">V</option>
+          <option value="K">K</option>
+        </select>
+      </label>
+      <label>Date
+        <input type="date" id="fundsDate" required>
+      </label>
+      <label>Notes
+        <input type="text" id="fundsNotes" placeholder="October budget" autocapitalize="sentences">
+      </label>
+      <div class="row end">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="settingsDialog">
-    <form method="dialog" id="settingsForm">
+    <form method="dialog" id="settingsForm" novalidate>
       <h2>Settings</h2>
       <p class="muted">Paste the Apps Script web app URL and the shared key. Both are saved only on this phone.</p>
       <label>Web app URL
@@ -73,7 +129,7 @@
       <label>Key
         <input type="password" id="secretKey" required>
       </label>
-      <div class="row">
+      <div class="row end">
         <button value="cancel" formnovalidate>Cancel</button>
         <button value="save" class="primary">Save</button>
       </div>
