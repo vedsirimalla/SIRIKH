@@ -6,7 +6,7 @@
     'Costco', 'Walmart', 'Harris Teeter', "Trader Joe's", 'Target', 'Shell',
     'Indian Store', 'Whole Foods', 'Amazon', 'Taco Bell', 'Subway', 'Dollar Tree',
   ];
-  const TYPE_LABELS = { 'Joint': 'Joint', 'Personal': 'Personal', 'Add funds': 'Funds added', 'Set balance': 'Balance set' };
+  const TYPE_LABELS = { 'Joint': 'Joint', 'Personal': 'Personal', 'Add funds': 'Funds added', 'Set balance': 'Budget set' };
 
   // ---------- Storage (this phone only)
   const store = {
@@ -90,54 +90,119 @@
   }
 
   // ---------- Rendering
-  // Starts from the last balance the sheet reported and applies changes not synced yet.
+  function monthName(iso) {
+    const m = /^(\d{4})-(\d{2})/.exec(iso || '');
+    return m ? new Date(+m[1], m[2] - 1, 1).toLocaleDateString('en-US', { month: 'long' }) : '';
+  }
+
+  function daysLeftInMonth() {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() - d.getDate() + 1;
+  }
+
+  const signed = (n) => (n > 0 ? '+' : '') + money(n);
+
+  // Starts from what the sheet last reported and applies changes not synced yet,
+  // so the budget and the split update the moment an expense is saved, even offline.
   function estimate() {
     const state = getState();
     const recent = state ? state.recent || [] : [];
+    const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, ...(state && state.period) };
     let balance = state ? Number(state.balance) || 0 : 0;
     let hasBalance = state ? !!state.hasBalance : false;
-    let unsynced = 0;
-    for (const op of getQueue()) {
-      unsynced++;
-      if (op.op === 'add') {
-        const e = op.entry;
-        if (e.type === 'Set balance') { balance = e.amount; hasBalance = true; }
-        else if (e.type === 'Add funds') balance += e.amount;
-        else if (e.type === 'Joint') balance -= e.amount;
+
+    const apply = (e, sign) => {
+      const amt = sign * e.amount;
+      if (e.type === 'Add funds') { balance += amt; p.added += amt; }
+      if (e.type === 'Joint') {
+        balance -= amt;
+        p.spent += amt;
+        if (e.paidBy === 'V') p.v += amt;
+        if (e.paidBy === 'K') p.k += amt;
+      }
+    };
+
+    const queue = getQueue();
+    for (const op of queue) {
+      if (op.op === 'add' && op.entry.type === 'Set balance') {
+        balance = op.entry.amount;
+        hasBalance = true;
+        Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0 });
+      } else if (op.op === 'add') {
+        apply(op.entry, 1);
       } else {
         const e = recent.find((r) => r.id === op.id);
-        if (e && e.type === 'Joint') balance += e.amount;
-        if (e && e.type === 'Add funds') balance -= e.amount;
+        if (e) apply(e, -1);
       }
     }
-    return { balance: round2(balance), hasBalance, unsynced };
+    for (const k of ['start', 'added', 'spent', 'v', 'k']) p[k] = round2(p[k]);
+    return { balance: round2(balance), hasBalance, unsynced: queue.length, period: p };
   }
 
   function renderBalance() {
-    const state = getState();
-    const { balance, hasBalance, unsynced } = estimate();
+    const { balance, hasBalance, unsynced, period: p } = estimate();
     const el = $('balanceAmount');
-    el.textContent = hasBalance || balance !== 0 ? money(balance) : '—';
+    el.textContent = hasBalance ? money(Math.abs(balance)) : balance !== 0 ? money(balance) : '—';
     el.classList.toggle('neg', balance < 0);
+    $('leftWord').hidden = !hasBalance;
+    $('leftWord').textContent = balance < 0 ? 'over budget' : 'left';
+    $('budgetDetails').hidden = !hasBalance;
+    $('balanceLabel').textContent = hasBalance ? `${monthName(p.since)} budget` : 'Monthly budget';
 
     const notes = [];
-    if (!hasBalance) notes.push('Tap “Set balance” to start tracking.');
+    if (hasBalance) {
+      const budget = round2(p.start + p.added);
+      const used = budget > 0 ? Math.min(100, Math.max(0, (p.spent / budget) * 100)) : p.spent > 0 ? 100 : 0;
+      const fill = $('meterFill');
+      fill.style.width = used + '%';
+      fill.className = 'meter-fill' + (balance < 0 ? ' over' : used >= 80 ? ' warn' : '');
+      fill.parentElement.setAttribute('aria-valuenow', String(Math.round(used)));
+      $('statBudget').textContent = money(budget);
+      $('statSpent').textContent = money(p.spent);
+
+      if (p.since.slice(0, 7) === today().slice(0, 7)) {
+        const days = daysLeftInMonth();
+        const dayWord = `${days} day${days > 1 ? 's' : ''}`;
+        const perDay = balance > 0 ? balance / days : 0;
+        $('statPerDay').textContent = balance > 0 ? money(perDay) : '—';
+        $('paceLine').textContent = balance < 0
+          ? `Over budget by ${money(-balance)} with ${dayWord} left.`
+          : `${dayWord} left in ${monthName(today())}. About ${money(perDay)} a day keeps you within budget.`;
+      } else {
+        $('statPerDay').textContent = '—';
+        $('paceLine').textContent = `This budget started ${prettyDate(p.since)}. Set a new one for ${monthName(today())}.`;
+      }
+    } else {
+      notes.push("Set this month's budget to start tracking.");
+    }
+
     if (unsynced) notes.push(`Includes ${unsynced} change${unsynced > 1 ? 's' : ''} not synced yet.`);
     const syncedAt = store.get('syncedAt', null);
     if (syncedAt && !unsynced) {
       notes.push('Updated ' + new Date(syncedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
     }
     $('balanceNote').textContent = notes.join(' ');
+    renderSplit(p, hasBalance);
+  }
 
-    const p = state && state.hasBalance ? state.period : null;
-    $('periodSummary').hidden = !p;
-    if (!p) return;
-    const added = p.added ? ` + ${money(p.added)} added` : '';
-    $('periodLine1').textContent = `Since ${prettyDate(p.since)}: ${money(p.start)} start${added}`;
-    $('periodLine2').textContent = `Joint spent ${money(p.spent)} · V paid ${money(p.v)} · K paid ${money(p.k)}`;
-    const diff = round2((p.v - p.k) / 2); // what one owes the other for an even split
-    $('settleLine').textContent =
-      Math.abs(diff) < 0.01 ? 'V and K are even' : diff > 0 ? `K owes V ${money(diff)}` : `V owes K ${money(-diff)}`;
+  // Same math as the sheet: share = what each paid minus half the joint total.
+  function renderSplit(p, hasBalance) {
+    $('splitCard').hidden = !hasBalance;
+    if (!hasBalance) return;
+    const split = round2(p.spent / 2);
+    const vShare = round2(p.v - split);
+    const kShare = round2(p.k - split);
+    $('paidV').textContent = money(p.v);
+    $('paidK').textContent = money(p.k);
+    $('paidTotal').textContent = money(p.spent);
+    $('equalSplit').textContent = money(split);
+    for (const [id, n] of [['shareV', vShare], ['shareK', kShare]]) {
+      $(id).textContent = signed(n);
+      $(id).className = n >= 0.01 ? 'pos' : n <= -0.01 ? 'neg' : '';
+    }
+    $('splitSince').textContent = 'Since ' + prettyDate(p.since);
+    $('settleLine').textContent = vShare <= -0.01 ? `V owes K ${money(-vShare)}`
+      : kShare <= -0.01 ? `K owes V ${money(-kShare)}` : 'V and K are even';
   }
 
   function renderRecent() {
@@ -349,7 +414,11 @@
     $('saveBtn').disabled = true;
     const status = await sync();
     $('saveBtn').disabled = false;
-    report(status, `Saved ✓ ${category} ${money(amount)}` + (entry.type === 'Joint' ? ` · Balance ${money(estimate().balance)}` : ''));
+    const left = estimate();
+    report(status, `Saved ✓ ${category} ${money(amount)}` +
+      (entry.type === 'Joint' && left.hasBalance
+        ? left.balance < 0 ? ` · ${money(-left.balance)} over budget` : ` · ${money(left.balance)} left`
+        : ''));
   });
 
   // ---------- Delete from Recent
@@ -370,48 +439,42 @@
     if (status === 'offline') showBanner('Will delete when you are back online.', 'warn');
   }
 
-  // ---------- Add funds / Set balance
+  // ---------- Set monthly budget
   const fundsDialog = $('fundsDialog');
-  let fundsMode = 'Add funds';
 
-  function openFunds(mode) {
-    fundsMode = mode;
-    const isSet = mode === 'Set balance';
-    $('fundsTitle').textContent = isSet ? 'Set balance' : 'Add funds';
-    $('fundsHelp').textContent = isSet
-      ? 'The main balance becomes exactly this amount, for example at the start of a month. Joint expenses after this are deducted from it.'
-      : 'This amount is added on top of the current main balance.';
+  function openBudget() {
     $('fundsForm').reset();
     clearInvalid($('fundsForm'));
     $('fundsDate').value = today();
+    $('fundsNotes').placeholder = `${monthName(today())} budget`;
     fundsDialog.showModal();
     $('fundsAmount').focus();
   }
-  $('addFundsBtn').addEventListener('click', () => openFunds('Add funds'));
-  $('setBalanceBtn').addEventListener('click', () => openFunds('Set balance'));
+  $('setBalanceBtn').addEventListener('click', openBudget);
 
   // Dialog buttons are handled on submit (not on the dialog's close event) so saving never depends on timing.
   $('fundsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (e.submitter && e.submitter.value === 'cancel') return fundsDialog.close();
     const amount = parseAmount($('fundsAmount').value);
-    if (amount === null || (amount === 0 && fundsMode !== 'Set balance')) return $('fundsAmount').classList.add('invalid');
+    if (amount === null || amount <= 0) return $('fundsAmount').classList.add('invalid');
     if (!$('fundsDate').value) return $('fundsDate').classList.add('invalid');
     fundsDialog.close();
+    const date = $('fundsDate').value;
     enqueue({
       op: 'add',
       entry: {
         id: uuid(),
-        date: $('fundsDate').value,
+        date,
         category: '',
         amount,
-        paidBy: $('fundsPaidBy').value,
-        notes: $('fundsNotes').value.trim(),
-        type: fundsMode,
+        paidBy: 'Both',
+        notes: $('fundsNotes').value.trim() || `${monthName(date)} budget`,
+        type: 'Set balance',
       },
     });
     const status = await sync();
-    report(status, `${fundsMode === 'Set balance' ? 'Balance set' : 'Funds added'} ✓ Balance ${money(estimate().balance)}`);
+    report(status, `Budget set ✓ ${money(amount)} for ${monthName(date)}`);
   });
 
   // ---------- Settings

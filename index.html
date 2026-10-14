@@ -24,18 +24,43 @@
     <div id="banner" class="banner" role="status" hidden></div>
 
     <section class="card balance-card" aria-labelledby="balanceLabel">
-      <div id="balanceLabel" class="eyebrow">Main balance</div>
-      <div id="balanceAmount" class="balance-amount">—</div>
+      <div id="balanceLabel" class="eyebrow">Monthly budget</div>
+      <div class="left-line">
+        <span id="balanceAmount" class="balance-amount">—</span>
+        <span id="leftWord" class="left-word" hidden>left</span>
+      </div>
+      <div id="budgetDetails" hidden>
+        <div class="meter" role="progressbar" aria-label="Budget used" aria-valuemin="0" aria-valuemax="100">
+          <div id="meterFill" class="meter-fill"></div>
+        </div>
+        <div class="stats">
+          <div><span class="stat-label">Budget</span><span id="statBudget"></span></div>
+          <div><span class="stat-label">Spent</span><span id="statSpent"></span></div>
+          <div><span class="stat-label" id="statPerDayLabel">Per day</span><span id="statPerDay"></span></div>
+        </div>
+        <div id="paceLine" class="pace"></div>
+      </div>
       <div id="balanceNote" class="muted"></div>
-      <div id="periodSummary" class="period" hidden>
-        <div id="periodLine1"></div>
-        <div id="periodLine2"></div>
-        <div id="settleLine" class="settle"></div>
+      <div class="row">
+        <button type="button" id="setBalanceBtn" class="full">Set monthly budget</button>
       </div>
-      <div class="row two">
-        <button type="button" id="addFundsBtn">+ Add funds</button>
-        <button type="button" id="setBalanceBtn">Set balance</button>
+    </section>
+
+    <section class="card" id="splitCard" aria-labelledby="splitLabel" hidden>
+      <div class="section-head">
+        <h2 id="splitLabel">Who owes whom</h2>
+        <span id="splitSince" class="muted"></span>
       </div>
+      <table class="split">
+        <tbody>
+          <tr><th scope="col">V paid</th><th scope="col">K paid</th><th scope="col">Total</th></tr>
+          <tr><td id="paidV"></td><td id="paidK"></td><td id="paidTotal"></td></tr>
+          <tr><th scope="col">V's share</th><th scope="col">K's share</th><th scope="col">Equal split</th></tr>
+          <tr><td id="shareV"></td><td id="shareK"></td><td id="equalSplit"></td></tr>
+        </tbody>
+      </table>
+      <div id="settleLine" class="settle"></div>
+      <div class="muted">Joint expenses only. Share = what each paid minus half the total.</div>
     </section>
 
     <form id="expenseForm" class="card" autocomplete="off" novalidate>
@@ -91,22 +116,15 @@
 
   <dialog id="fundsDialog">
     <form method="dialog" id="fundsForm" novalidate>
-      <h2 id="fundsTitle">Add funds</h2>
-      <p id="fundsHelp" class="muted"></p>
-      <label>Amount ($)
+      <h2>Set monthly budget</h2>
+      <p class="muted">Starts a new budget. Joint expenses saved after this come out of it, and the V/K split starts again from zero.</p>
+      <label>Budget ($)
         <div class="amount">
           <span>$</span>
-          <input type="text" id="fundsAmount" inputmode="decimal" placeholder="0.00" required>
+          <input type="text" id="fundsAmount" inputmode="decimal" placeholder="705.00" required>
         </div>
       </label>
-      <label>Added by
-        <select id="fundsPaidBy">
-          <option value="Both">Both</option>
-          <option value="V">V</option>
-          <option value="K">K</option>
-        </select>
-      </label>
-      <label>Date
+      <label>Start date
         <input type="date" id="fundsDate" required>
       </label>
       <label>Notes

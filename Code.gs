@@ -19,6 +19,12 @@
  *   Set balance  balance becomes exactly this amount (for example at the start of a month)
  * Balance ($) is recalculated by this script from top to bottom, so edits made by hand
  * in the tab (amount or type) are picked up automatically. Negative amounts are refunds.
+ *
+ * A summary of the current budget period (since the last "Set balance" row) is kept in J1:O4:
+ *   V | K | Total          Budget    | amount
+ *   (joint paid by each)   Remaining | amount
+ *   V's Share | K's Share | Equal Split   Since | date
+ *   (paid minus half)      Settle up | "V owes K $x"
  */
 
 const TAB_NAME = 'Sirikh';
@@ -26,6 +32,7 @@ const HEADERS = ['Date', 'Category', 'Amount ($)', 'Paid By', 'Notes', 'Type', '
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7 };
 const TYPES = ['Joint', 'Personal', 'Add funds', 'Set balance'];
 const RECENT_COUNT = 5;
+const SUMMARY_COL = 10; // column J
 
 function doGet() {
   return ContentService.createTextOutput('Sirikh backend is running.');
@@ -57,7 +64,8 @@ function doPost(e) {
 // Simple trigger: keeps Balance ($) correct when the tab is edited by hand.
 function onEdit(e) {
   const sheet = e && e.range && e.range.getSheet();
-  if (sheet && sheet.getName() === TAB_NAME) recompute_(sheet);
+  if (!sheet || sheet.getName() !== TAB_NAME || e.range.getColumn() >= SUMMARY_COL) return;
+  writeSummary_(sheet, period_(recompute_(sheet)));
 }
 
 function checkKey_(key) {
@@ -118,8 +126,9 @@ function safeText_(s) {
 function addEntry_(sheet, entry) {
   // Retries from the phone's offline queue reuse the same id; save once.
   if (ids_(sheet).indexOf(entry.id) !== -1) return;
-  sheet.appendRow([entry.date, entry.category, entry.amount, entry.paidBy, entry.notes, entry.type, '', entry.id]);
-  const row = sheet.getLastRow();
+  const row = nextRow_(sheet);
+  sheet.getRange(row, 1, 1, HEADERS.length)
+    .setValues([[entry.date, entry.category, entry.amount, entry.paidBy, entry.notes, entry.type, '', entry.id]]);
   sheet.getRange(row, C.DATE + 1).setNumberFormat('yyyy-mm-dd');
   sheet.getRange(row, C.AMOUNT + 1).setNumberFormat('$#,##0.00');
 }
@@ -128,6 +137,13 @@ function deleteEntry_(sheet, id) {
   if (!id) throw new Error('Missing id.');
   const i = ids_(sheet).lastIndexOf(id);
   if (i !== -1) sheet.deleteRow(i + 2); // already gone is fine (retried delete)
+}
+
+// First empty row under the data in A:H (the summary block in J:O does not count).
+function nextRow_(sheet) {
+  const rows = readRows_(sheet);
+  for (let i = rows.length - 1; i >= 0; i--) if (!isEmptyRow_(rows[i])) return i + 3;
+  return 2;
 }
 
 function ids_(sheet) {
@@ -179,31 +195,12 @@ function state_(sheet) {
   const rows = recompute_(sheet);
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const data = rows.filter((r) => !isEmptyRow_(r));
-
-  // The current period starts at the most recent "Set balance" row.
-  let start = -1;
-  data.forEach((r, i) => { if (r[C.TYPE] === 'Set balance') start = i; });
-
-  const period = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0 };
-  if (start !== -1) {
-    period.since = formatDate_(data[start][C.DATE], tz);
-    period.start = toNumber_(data[start][C.AMOUNT]);
-  }
-  data.slice(start + 1).forEach((r) => {
-    const amount = toNumber_(r[C.AMOUNT]);
-    if (r[C.TYPE] === 'Add funds') period.added += amount;
-    if (r[C.TYPE] === 'Joint') {
-      period.spent += amount;
-      if (r[C.PAID_BY] === 'V') period.v += amount;
-      if (r[C.PAID_BY] === 'K') period.k += amount;
-    }
-  });
-  Object.keys(period).forEach((k) => { if (typeof period[k] === 'number') period[k] = round2_(period[k]); });
-
+  const period = period_(rows);
+  writeSummary_(sheet, period);
   return {
     ok: true,
     balance: data.length ? data[data.length - 1][C.BALANCE] : 0,
-    hasBalance: start !== -1,
+    hasBalance: period.since !== '',
     period: period,
     recent: data.slice(-RECENT_COUNT).reverse().map((r) => ({
       id: String(r[C.ID]),
@@ -216,6 +213,53 @@ function state_(sheet) {
       balance: r[C.BALANCE],
     })),
   };
+}
+
+// Totals for the current period, which starts at the most recent "Set balance" row.
+function period_(rows) {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const data = rows.filter((r) => !isEmptyRow_(r));
+  let start = -1;
+  data.forEach((r, i) => { if (r[C.TYPE] === 'Set balance') start = i; });
+
+  const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0 };
+  if (start !== -1) {
+    p.since = formatDate_(data[start][C.DATE], tz);
+    p.start = toNumber_(data[start][C.AMOUNT]);
+  }
+  data.slice(start + 1).forEach((r) => {
+    const amount = toNumber_(r[C.AMOUNT]);
+    if (r[C.TYPE] === 'Add funds') p.added += amount;
+    if (r[C.TYPE] === 'Joint') {
+      p.spent += amount;
+      if (r[C.PAID_BY] === 'V') p.v += amount;
+      if (r[C.PAID_BY] === 'K') p.k += amount;
+    }
+  });
+  Object.keys(p).forEach((k) => { if (typeof p[k] === 'number') p[k] = round2_(p[k]); });
+  return p;
+}
+
+// Same layout as the monthly blocks in the other tabs: share = paid minus half of the total.
+function writeSummary_(sheet, p) {
+  const budget = round2_(p.start + p.added);
+  const split = round2_(p.spent / 2);
+  const vShare = round2_(p.v - split);
+  const kShare = round2_(p.k - split);
+  let settle = 'Even';
+  if (vShare <= -0.01) settle = 'V owes K $' + (-vShare).toFixed(2);
+  else if (kShare <= -0.01) settle = 'K owes V $' + (-kShare).toFixed(2);
+  sheet.getRange(1, SUMMARY_COL, 4, 6).setValues([
+    ['V', 'K', 'Total', '', 'Budget', budget],
+    [p.v, p.k, p.spent, '', 'Remaining', round2_(budget - p.spent)],
+    ["V's Share", "K's Share", 'Equal Split', '', 'Since', p.since],
+    [vShare, kShare, split, '', 'Settle up', settle],
+  ]);
+  sheet.getRange(2, SUMMARY_COL, 1, 3).setNumberFormat('$#,##0.00');
+  sheet.getRange(4, SUMMARY_COL, 1, 3).setNumberFormat('$#,##0.00');
+  sheet.getRange(1, SUMMARY_COL + 5, 2, 1).setNumberFormat('$#,##0.00');
+  sheet.getRange(1, SUMMARY_COL, 1, 3).setFontWeight('bold');
+  sheet.getRange(3, SUMMARY_COL, 1, 3).setFontWeight('bold');
 }
 
 function normalizeType_(v) {

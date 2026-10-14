@@ -1,18 +1,21 @@
 # Sirikh
 
-A small expense logger for V and K. It runs from the iPhone home screen, writes each expense to the **Sirikh** tab of our Google Sheet, and keeps a main balance that joint expenses are deducted from.
+A small expense logger for V and K. It runs from the iPhone home screen, writes each expense to the **Sirikh** tab of our Google Sheet, and tracks a monthly budget that joint expenses are deducted from.
 
 The site is live at: https://vedsirimalla.github.io/SIRIKH/
 
 ## Features
 
 - **Entry form:** Date (calendar, defaults to today), Category (store name, with suggestions), Amount, Paid By (V or K), Type (Joint or Personal), Notes.
-- **Main balance:**
-  - **Set balance** sets it to an exact amount and starts a new period, for example at the start of a month.
-  - **Add funds** adds to it.
-  - **Joint** expenses are deducted; **Personal** expenses are logged only.
+- **Monthly budget:**
+  - **Set monthly budget** starts a new budget, for example $705 on the 1st.
+  - **Joint** expenses are deducted the moment they are saved; **Personal** expenses are logged only.
+  - The card shows how much is left, a progress bar, budget, spent, and how much you can spend per day for the rest of the month.
   - A negative amount is a refund and is added back.
-- **Period summary:** joint spending since the last Set balance, the amount V and K each paid, and who owes whom for an even split.
+- **Who owes whom:** the same block as the monthly tabs, for joint expenses since the budget was set:
+  - V paid, K paid, Total.
+  - V's share and K's share (what each paid minus half the total), and the Equal split.
+  - A plain line such as "V owes K $140.50".
 - **Recent list:** the last 5 entries with the running balance. Tap **x** to delete one.
 - **Offline:** entries saved without signal are kept on the phone and synced later. An hourglass marks unsynced entries.
 - **Security:** a shared key protects writes. The repo contains no sheet ID, key, or data.
@@ -37,19 +40,30 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 
 - **Tab:** set by `TAB_NAME` at the top of `Code.gs` (default `Sirikh`). The tab is created if it does not exist.
 - **Changing the tab:** edit `TAB_NAME`, then deploy a new version.
-- **Existing tabs:** do not point it at a tab you already use for something else. The script rewrites row 1 as its header and fills the Type and Balance columns.
+- **Existing tabs:** do not point it at a tab you already use for something else. The script rewrites row 1 as its header, fills the Type and Balance columns, and writes a summary in J1:O4.
 
 ## Sirikh tab layout
 
 | Date | Category | Amount ($) | Paid By | Notes | Type | Balance ($) | ID (hidden) |
 |---|---|---|---|---|---|---|---|
-| 2026-10-01 | Balance set | $650.00 | Both | October budget | Set balance | $650.00 | |
-| 2026-10-02 | Costco | $45.20 | K | Paneer, grapes | Joint | $604.80 | |
-| 2026-10-02 | Haircut | $20.00 | V | | Personal | $604.80 | |
+| 2026-10-01 | Balance set | $705.00 | Both | October budget | Set balance | $705.00 | |
+| 2026-10-02 | Costco | $45.20 | K | Paneer, grapes | Joint | $659.80 | |
+| 2026-10-02 | Haircut | $20.00 | V | | Personal | $659.80 | |
 
 - **Type** is one of `Joint`, `Personal`, `Add funds`, `Set balance`. Blank counts as Joint.
 - **Balance ($)** is recalculated top to bottom by the script, including after hand edits to Amount or Type.
 - **ID** prevents duplicates and identifies rows to delete. Do not edit it.
+- **Set balance** rows start a new budget. Everything below the most recent one belongs to the current month.
+
+Summary block in **J1:O4**, updated on every save, for the current budget:
+
+| V | K | Total | | Budget | 705 |
+|---|---|---|---|---|---|
+| 211.43 | 484.41 | 695.84 | | Remaining | 9.16 |
+| **V's Share** | **K's Share** | **Equal Split** | | Since | 2026-10-01 |
+| -136.49 | 136.49 | 347.92 | | Settle up | V owes K $136.49 |
+
+Do not type in J1:O4; the script overwrites it.
 
 ## Setup
 
@@ -99,7 +113,7 @@ Do this on a computer, in your Google Sheet.
 **Step 8. Connect the app**
 - On your iPhone, open Sirikh from the home screen and tap the gear icon. (To install it, see section 2.)
 - Paste the URL, enter the passphrase, and tap **Save**. You should see "Connected".
-- Tap **Set balance** to enter your starting amount. A **Sirikh** tab appears in your sheet.
+- Tap **Set monthly budget** and enter this month's budget. A **Sirikh** tab appears in your sheet.
 
 ### 2. Install on each iPhone
 
