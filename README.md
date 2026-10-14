@@ -62,13 +62,7 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 5. Click **Deploy** and approve access. Google will warn that the app is unverified: choose **Advanced > Go to (project name) > Allow**. It is your own script.
 6. Copy the **Web app URL**. It starts with `https://script.google.com/macros/s/` and ends with `/exec`. This URL, not the sheet URL, goes into the app.
 
-### 2. Website (once)
-
-1. In the GitHub repo, go to **Add file > Upload files**, add all files, and click **Commit changes**.
-2. Go to **Settings > Pages**. Set Source to **Deploy from a branch**, Branch to **main**, folder **/ (root)**, and click **Save**. If Save is grayed out, this is already set.
-3. After 1 to 2 minutes (check the **Actions** tab for a green check), the app is live at `https://<username>.github.io/<repo>/`.
-
-### 3. Each iPhone
+### 2. Each iPhone
 
 1. Open the site in **Safari**, tap **Share > Add to Home Screen > Add**.
 2. Open Sirikh from the home screen, tap the gear icon, and enter the Web app URL and the passphrase. You should see "Connected". Do this in the home screen app, not in Safari, because the two keep separate storage.
