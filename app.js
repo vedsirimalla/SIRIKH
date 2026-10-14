@@ -11,15 +11,19 @@
     Personal: 'Personal: only for the person who paid. Not in the budget or who owes whom.',
   };
 
-  // Matches the row colors in the sheet: Personal blue (V light, K darker), Fixed orange per bill.
+  // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
   function colorClass(r) {
     if (r.type === 'Personal') return r.paidBy === 'K' ? 'c-personal-k' : 'c-personal-v';
-    if (r.type === 'Fixed') {
-      const name = FIXED_CATEGORIES.find((c) => c.toLowerCase() === String(r.category).trim().toLowerCase());
-      return name ? 'c-fixed-' + name.toLowerCase().replace(/[^a-z]/g, '') : 'c-fixed-misc';
-    }
+    if (r.type === 'Fixed') return r.paidBy === 'K' ? 'c-fixed-k' : 'c-fixed-v';
     return '';
   }
+
+  // Older copies of Code.gs save unknown types as Joint, so Fixed bills wait on the phone until
+  // the sheet's script is redeployed with at least this version.
+  const REQUIRED_BACKEND = 7;
+  const OUTDATED_MESSAGE = 'Fixed bills are waiting on this phone (hourglass) because the Apps Script in your sheet ' +
+    'is an older version that would save them as Joint. In Apps Script: paste the latest Code.gs, then ' +
+    'Deploy > Manage deployments > pencil > Version: New version > Deploy. They will send automatically.';
 
   // ---------- Storage (this phone only)
   const store = {
@@ -319,11 +323,20 @@
       hasBalance: data.hasBalance,
       period: data.period,
       recent: data.recent || [],
+      version: data.version || 0,
     });
     store.set('syncedAt', Date.now());
   }
 
-  // Sends queued changes in order, then refreshes. Returns 'ok', 'rejected', 'offline', 'config' or 'setup'.
+  function backendOutdated() {
+    const st = getState();
+    return !!st && st.version < REQUIRED_BACKEND;
+  }
+  const heldBack = (op) => op.op === 'add' && op.entry.type === 'Fixed' && backendOutdated();
+  const nextOp = () => getQueue().find((op) => !heldBack(op));
+
+  // Sends queued changes in order, then refreshes.
+  // Returns 'ok', 'rejected', 'outdated', 'offline', 'config' or 'setup'.
   let syncing = null;
   function sync() {
     if (!syncing) syncing = runSync().finally(() => { syncing = null; });
@@ -333,8 +346,12 @@
   async function runSync() {
     let rejected = false;
     try {
+      // Learn the script's version before sending anything that depends on it, and check again
+      // while Fixed bills are being held (the script may have been redeployed since).
+      const st = getState();
+      if (!st || st.version === undefined || getQueue().some(heldBack)) saveState(await call({ action: 'state' }));
       let sent = false;
-      for (let op = getQueue()[0]; op; op = getQueue()[0]) {
+      for (let op = nextOp(); op; op = nextOp()) {
         try {
           const data = await call(op.op === 'add' ? { action: 'add', entry: op.entry } : { action: 'delete', id: op.id });
           saveState(data);
@@ -351,6 +368,10 @@
       }
       if (!sent) saveState(await call({ action: 'state' }));
       render();
+      if (getQueue().some(heldBack)) {
+        showBanner(OUTDATED_MESSAGE, 'err', true);
+        return 'outdated';
+      }
       return rejected ? 'rejected' : 'ok';
     } catch (err) {
       render();

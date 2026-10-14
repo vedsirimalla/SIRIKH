@@ -86,16 +86,13 @@ main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
 .split .pos { color: var(--pos); }
 .split .neg { color: var(--err); }
 .overall { font-weight: 600; margin-bottom: 4px; }
-.fixed-card { border-left: 5px solid #fdba74; }
+.fixed-card { border-left: 5px solid #fb923c; }
 
-/* Row colors, same as the sheet: Personal blue (V light, K darker), Fixed orange per bill */
+/* Row colors, same as the sheet: Personal blues and Fixed oranges, lighter for V, darker for K */
 .c-personal-v { --row: #dbeafe; }
 .c-personal-k { --row: #93c5fd; }
-.c-fixed-rent { --row: #fdba74; }
-.c-fixed-utilities { --row: #fed7aa; }
-.c-fixed-electricity { --row: #fcc896; }
-.c-fixed-wifi { --row: #ffe0c2; }
-.c-fixed-misc { --row: #ffedd5; }
+.c-fixed-v { --row: #fed7aa; }
+.c-fixed-k { --row: #fb923c; }
 .recent li { border-left: 5px solid var(--row, transparent); padding-left: 8px; }
 .recent li[class*="c-"] .tag { background: var(--row); color: #1c1917; }
 
@@ -126,7 +123,7 @@ legend { margin-bottom: 6px; padding: 0; }
   font-weight: 600;
   cursor: pointer;
 }
-.chips input:checked + label { background: var(--row); color: #1c1917; border-color: #ea580c; }
+.chips input:checked + label { background: #fdba74; color: #1c1917; border-color: #ea580c; }
 .chips input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 fieldset { border: 0; padding: 0; margin: 0 0 14px; min-width: 0; }

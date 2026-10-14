@@ -14,7 +14,7 @@
  *
  * Type is one of:
  *   Joint        shared day-to-day expense, deducted from the monthly budget      (no color)
- *   Fixed        rent, utilities and other bills, tracked separately from the budget (orange)
+ *   Fixed        rent, utilities and other bills, tracked separately (orange: V light, K darker)
  *   Personal     logged only                                                     (blue: V light, K darker)
  *   Set balance  starts a new monthly budget
  *   Add funds    adds to the budget (only from hand edits; the app no longer offers it)
@@ -28,28 +28,24 @@
  */
 
 const TAB_NAME = 'Sirikh';
+// The app checks this. Bump it whenever the app starts depending on something new in this file.
+const BACKEND_VERSION = 7;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Paid By', 'Notes', 'Type', 'Balance ($)', 'ID'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance'];
-// The app offers only these fixed bills; each has its own shade of orange (Rent strongest).
-const FIXED_COLORS = {
-  'Rent': '#fdba74',
-  'Utilities': '#fed7aa',
-  'Electricity': '#fcc896',
-  'Wi-Fi': '#ffe0c2',
-  'Misc': '#ffedd5',
-};
+// Row colors by who paid: Personal in blues, Fixed bills in oranges (V lighter, K darker).
 const COLORS = {
-  personalV: '#dbeafe', // light blue
-  personalK: '#93c5fd', // darker blue
-  fixedOther: '#ffedd5', // a fixed bill typed by hand with another name
+  personalV: '#dbeafe',
+  personalK: '#93c5fd',
+  fixedV: '#fed7aa',
+  fixedK: '#fb923c',
 };
 const MONEY = '$#,##0.00';
 const RECENT_COUNT = 5;
 const SUMMARY_COL = 10; // column J
 
 function doGet() {
-  return ContentService.createTextOutput('Sirikh backend is running.');
+  return ContentService.createTextOutput('Sirikh backend is running. Version ' + BACKEND_VERSION + '.');
 }
 
 function doPost(e) {
@@ -209,11 +205,7 @@ function recompute_(sheet) {
 function rowColor_(r) {
   if (isEmptyRow_(r)) return null;
   if (r[C.TYPE] === 'Personal') return r[C.PAID_BY] === 'K' ? COLORS.personalK : COLORS.personalV;
-  if (r[C.TYPE] === 'Fixed') {
-    const name = String(r[C.CATEGORY]).trim().toLowerCase();
-    const key = Object.keys(FIXED_COLORS).find((k) => k.toLowerCase() === name);
-    return key ? FIXED_COLORS[key] : COLORS.fixedOther;
-  }
+  if (r[C.TYPE] === 'Fixed') return r[C.PAID_BY] === 'K' ? COLORS.fixedK : COLORS.fixedV;
   return null; // Joint and budget rows stay plain
 }
 
@@ -239,6 +231,7 @@ function state_(sheet) {
   writeSummary_(sheet, all);
   return {
     ok: true,
+    version: BACKEND_VERSION,
     balance: data.length ? data[data.length - 1][C.BALANCE] : 0,
     hasBalance: period.since !== '',
     period: period,
@@ -347,8 +340,8 @@ function writeSummary_(sheet, periods) {
     line('Personal V'),                                                               // 20
     line('Personal K'),                                                               // 21
   ];
-  const legendStart = out.length + 1;
-  Object.keys(FIXED_COLORS).forEach((name) => out.push(line('Fixed: ' + name)));
+  out.push(line('Fixed V'));                                                        // 22
+  out.push(line('Fixed K'));                                                        // 23
   out.push(blank());
   const historyTitle = out.length + 1;
   out.push(line('History'));
@@ -376,7 +369,8 @@ function writeSummary_(sheet, periods) {
   [6, 7, 12].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
   cell(20, 0).setBackground(COLORS.personalV);
   cell(21, 0).setBackground(COLORS.personalK);
-  Object.keys(FIXED_COLORS).forEach((name, i) => cell(legendStart + i, 0).setBackground(FIXED_COLORS[name]));
+  cell(22, 0).setBackground(COLORS.fixedV);
+  cell(23, 0).setBackground(COLORS.fixedK);
   if (periods.length) {
     cell(historyStart, 1, periods.length, 6).setNumberFormat(MONEY);
     cell(historyStart, 8, periods.length, 1).setNumberFormat(MONEY);

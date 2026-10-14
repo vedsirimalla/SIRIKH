@@ -28,8 +28,8 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   | Joint | No color |
   | Personal, V | Light blue |
   | Personal, K | Darker blue |
-  | Fixed: Rent | Orange (strongest) |
-  | Fixed: Utilities, Electricity, Wi-Fi, Misc | Lighter shades of orange, one per bill |
+  | Fixed, V | Light orange |
+  | Fixed, K | Darker orange |
 - **Recent list:** the last 5 entries with the running balance. Tap **x** to delete one.
 - **Offline:** entries saved without signal are kept on the phone and synced later. An hourglass marks unsynced entries.
 - **Security:** a shared key protects writes. The repo contains no sheet ID, key, or data.
@@ -157,6 +157,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
+| Fixed bills stay on the phone with an hourglass, or show as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 7" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |
