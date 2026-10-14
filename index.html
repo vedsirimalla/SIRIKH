@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sirikh</title>
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Sirikh">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>Sirikh</h1>
+    <button id="settingsBtn" class="icon-btn" aria-label="Settings">⚙︎</button>
+  </header>
+
+  <main>
+    <div id="banner" class="banner" hidden></div>
+
+    <form id="expenseForm" autocomplete="off">
+      <label>Date
+        <input type="date" id="date" required>
+      </label>
+
+      <label>Category
+        <input type="text" id="category" list="categoryList" placeholder="Costco, Walmart, Shell…" required autocapitalize="words">
+        <datalist id="categoryList"></datalist>
+      </label>
+
+      <label>Amount ($)
+        <div class="amount">
+          <span>$</span>
+          <input type="text" id="amount" inputmode="decimal" placeholder="0.00" required>
+        </div>
+      </label>
+
+      <label>Paid By
+        <select id="paidBy" required>
+          <option value="V">V</option>
+          <option value="K">K</option>
+        </select>
+      </label>
+
+      <label>Notes
+        <input type="text" id="notes" placeholder="Milk, bananas, gas…" autocapitalize="sentences">
+      </label>
+
+      <button type="submit" id="saveBtn" class="primary">Save expense</button>
+    </form>
+
+    <section>
+      <div class="section-head">
+        <h2>Recent</h2>
+        <span id="pendingNote" class="muted"></span>
+      </div>
+      <ul id="recentList" class="recent"><li class="muted">Nothing yet.</li></ul>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog">
+    <form method="dialog" id="settingsForm">
+      <h2>Settings</h2>
+      <p class="muted">Paste the Apps Script web app URL and the shared key. Both are saved only on this phone.</p>
+      <label>Web app URL
+        <input type="url" id="scriptUrl" placeholder="https://script.google.com/macros/s/…/exec" required>
+      </label>
+      <label>Key
+        <input type="password" id="secretKey" required>
+      </label>
+      <div class="row">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
