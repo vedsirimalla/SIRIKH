@@ -55,20 +55,55 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 
 ### 1. Backend (once)
 
-1. Open the spreadsheet, then go to **Extensions > Apps Script**.
-2. Replace everything in `Code.gs` with this repo's `Code.gs`, then click **Save**.
-3. Go to **Project Settings > Script properties > Add script property**. Set Property to `SIRIKH_KEY` and Value to a passphrase of your choice.
-4. Go to **Deploy > New deployment**, select type **Web app**, and set:
-   - Execute as: **Me**
-   - Who has access: **Anyone**
-5. Click **Deploy** and approve access. Google will warn that the app is unverified: choose **Advanced > Go to (project name) > Allow**. It is your own script.
-6. Copy the **Web app URL**. It starts with `https://script.google.com/macros/s/` and ends with `/exec`. This URL, not the sheet URL, goes into the app.
+Do this on a computer, in your Google Sheet.
 
-### 2. Each iPhone
+**Step 1. Copy the code**
+- Go to https://github.com/VedSirimalla/SIRIKH/blob/main/Code.gs.
+- Click the **Copy raw file** icon at the top right of the code box.
 
-1. Open the site in **Safari**, tap **Share > Add to Home Screen > Add**.
-2. Open Sirikh from the home screen, tap the gear icon, and enter the Web app URL and the passphrase. You should see "Connected". Do this in the home screen app, not in Safari, because the two keep separate storage.
-3. Tap **Set balance** and enter the starting amount.
+**Step 2. Open Apps Script from your sheet**
+- Open your spreadsheet (the one with "Groceries 2026").
+- Click **Extensions > Apps Script**. A new tab opens.
+
+**Step 3. Paste the code**
+- In the editor, select everything in `Code.gs` (Ctrl+A) and delete it.
+- Paste the code (Ctrl+V).
+- Click the **Save** icon (floppy disk) or press Ctrl+S.
+- Optional: rename the project at the top left from "Untitled project" to `Sirikh`.
+
+**Step 4. Set your passphrase**
+- In the left sidebar, click **Project Settings** (the gear icon).
+- Scroll to **Script properties**, click **Add script property**, and enter:
+  - Property: `SIRIKH_KEY`
+  - Value: any passphrase, for example `costco-2026`. You and K will each type it into the app once.
+- Click **Save script properties**.
+
+**Step 5. Deploy**
+- At the top right, click **Deploy > New deployment**.
+- Click the gear next to "Select type" and choose **Web app**.
+- Set:
+  - Description: `Sirikh`
+  - Execute as: **Me**
+  - Who has access: **Anyone**
+- Click **Deploy**.
+
+**Step 6. Approve access**
+- Click **Authorize access** and choose your Google account.
+- If you see "Google hasn't verified this app", click **Advanced**, then **Go to Sirikh (unsafe)**. It's your own script.
+- Click **Allow**.
+
+**Step 7. Copy the URL**
+- Copy the **Web app URL**. It looks like `https://script.google.com/macros/s/AKfy.../exec`.
+- To test it, open the URL in a browser tab. It should say "Sirikh backend is running."
+
+**Step 8. Connect the app**
+- On your iPhone, open Sirikh from the home screen and tap the gear icon. (To install it, see section 2.)
+- Paste the URL, enter the passphrase, and tap **Save**. You should see "Connected".
+- Tap **Set balance** to enter your starting amount. A **Sirikh** tab appears in your sheet.
+
+### 2. Install on each iPhone
+
+Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Add to Home Screen > Add**. Then do Step 8 above inside the home screen app, not in Safari, because the two keep separate storage.
 
 ## Updating
 
