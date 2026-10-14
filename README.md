@@ -1,90 +1,92 @@
 # Sirikh
 
-A tiny expense logger for V and K. It sits on the iPhone home screen and writes every expense to the **Sirikh** tab of our Google Sheet. It also keeps a **main balance**: joint expenses are deducted from it automatically.
+A small expense logger for V and K. It runs from the iPhone home screen, writes each expense to the **Sirikh** tab of our Google Sheet, and keeps a main balance that joint expenses are deducted from.
 
 ## Features
 
-- **Quick entry:** Date (calendar picker, today by default), Category (type the store; it suggests ones you've used), Amount, Paid By (V / K), Type (Joint / Personal), Notes.
+- **Entry form:** Date (calendar, defaults to today), Category (store name, with suggestions), Amount, Paid By (V or K), Type (Joint or Personal), Notes.
 - **Main balance:**
-  - **Set balance** starts a new budget (for example $650 at the start of the month).
-  - **Add funds** tops it up.
-  - Each **Joint** expense is deducted. **Personal** expenses are logged without touching the balance.
-  - Negative amounts are refunds and add back to the balance.
-- **Period summary:** joint spending since the last "Set balance", how much V and K each paid, and who owes whom for an even split.
-- **Recent list:** the last 5 entries with the running balance. Tap **×** to delete one; the balance recalculates.
-- **Works offline:** with no signal, entries are kept on the phone and synced automatically later. ⏳ marks entries waiting to sync.
-- **Safe:** writes are protected by a shared key. The repo contains no sheet ID, key or data.
+  - **Set balance** sets it to an exact amount and starts a new period, for example at the start of a month.
+  - **Add funds** adds to it.
+  - **Joint** expenses are deducted; **Personal** expenses are logged only.
+  - A negative amount is a refund and is added back.
+- **Period summary:** joint spending since the last Set balance, the amount V and K each paid, and who owes whom for an even split.
+- **Recent list:** the last 5 entries with the running balance. Tap **x** to delete one.
+- **Offline:** entries saved without signal are kept on the phone and synced later. An hourglass marks unsynced entries.
+- **Security:** a shared key protects writes. The repo contains no sheet ID, key, or data.
 
 ## Files
 
-All files sit at the top level of the repo (no folders), so a drag-and-drop upload to GitHub works as-is.
+Keep all files at the top level of the repo.
 
-| File | What it is |
+| File | Purpose |
 |---|---|
-| `index.html` | The app screen |
-| `styles.css` | Look and feel (light and dark mode) |
-| `app.js` | App logic: form, balance, offline queue, sync |
-| `sw.js` | Service worker, so the app opens offline |
-| `manifest.webmanifest` | Home-screen app name, colors and icons |
-| `icon-180.png`, `icon-192.png`, `icon-512.png` | App icons |
-| `Code.gs` | Google Apps Script backend. Paste it into the sheet; it does not run on GitHub |
-| `README.md` | This file |
+| `index.html` | App screen |
+| `styles.css` | Styling, light and dark mode |
+| `app.js` | Form, balance, offline queue, sync |
+| `sw.js` | Lets the app open offline |
+| `manifest.webmanifest` | Home screen name, colors, icons |
+| `icon-180.png`, `icon-192.png`, `icon-512.png` | Icons |
+| `Code.gs` | Backend. Paste it into the spreadsheet's Apps Script; it does not run on GitHub |
 
-## The Sirikh tab
+## How the sheet is chosen
 
-The script creates it automatically:
+The app never uses the Google Sheets URL. It talks to the **Apps Script web app** you deploy from inside the spreadsheet, and that script writes to whichever spreadsheet you opened it from.
+
+- **Tab:** set by `TAB_NAME` at the top of `Code.gs` (default `Sirikh`). The tab is created if it does not exist.
+- **Changing the tab:** edit `TAB_NAME`, then deploy a new version.
+- **Existing tabs:** do not point it at a tab you already use for something else. The script rewrites row 1 as its header and fills the Type and Balance columns.
+
+## Sirikh tab layout
 
 | Date | Category | Amount ($) | Paid By | Notes | Type | Balance ($) | ID (hidden) |
 |---|---|---|---|---|---|---|---|
-| 2026-10-01 | Balance set | $650.00 | Both | October budget | Set balance | $650.00 | … |
-| 2026-10-02 | Costco | $45.20 | K | Paneer, grapes | Joint | $604.80 | … |
-| 2026-10-02 | Haircut | $20.00 | V | | Personal | $604.80 | … |
+| 2026-10-01 | Balance set | $650.00 | Both | October budget | Set balance | $650.00 | |
+| 2026-10-02 | Costco | $45.20 | K | Paneer, grapes | Joint | $604.80 | |
+| 2026-10-02 | Haircut | $20.00 | V | | Personal | $604.80 | |
 
-- **Balance ($)** is recalculated from top to bottom by the script. If you edit an Amount or Type by hand in the sheet, the balances update by themselves.
-- **Type** must be one of `Joint`, `Personal`, `Add funds` or `Set balance`. A blank Type counts as Joint.
-- The hidden **ID** column lets the app avoid duplicates and delete the right row. Don't edit it.
+- **Type** is one of `Joint`, `Personal`, `Add funds`, `Set balance`. Blank counts as Joint.
+- **Balance ($)** is recalculated top to bottom by the script, including after hand edits to Amount or Type.
+- **ID** prevents duplicates and identifies rows to delete. Do not edit it.
 
 ## Setup
 
-### 1. Backend (Google Apps Script), once
-1. Open the spreadsheet → **Extensions → Apps Script**.
-2. Delete everything in `Code.gs`, paste in this repo's [`Code.gs`](Code.gs), and click **Save** 💾.
-3. **Project Settings** ⚙️ → **Script properties** → **Add script property**:
-   - Property: `SIRIKH_KEY`
-   - Value: a passphrase of your choice. V and K each type it into the app once.
-4. **Deploy → New deployment** → ⚙️ **Select type → Web app**:
+### 1. Backend (once)
+
+1. Open the spreadsheet, then go to **Extensions > Apps Script**.
+2. Replace everything in `Code.gs` with this repo's `Code.gs`, then click **Save**.
+3. Go to **Project Settings > Script properties > Add script property**. Set Property to `SIRIKH_KEY` and Value to a passphrase of your choice.
+4. Go to **Deploy > New deployment**, select type **Web app**, and set:
    - Execute as: **Me**
    - Who has access: **Anyone**
-5. Click **Deploy**. Approve access: choose your account, click **Advanced → Go to … (unsafe) → Allow**. This is your own script.
-6. Copy the **Web app URL** (it ends in `/exec`).
+5. Click **Deploy** and approve access. Google will warn that the app is unverified: choose **Advanced > Go to (project name) > Allow**. It is your own script.
+6. Copy the **Web app URL**. It starts with `https://script.google.com/macros/s/` and ends with `/exec`. This URL, not the sheet URL, goes into the app.
 
-**Already deployed the earlier version?** Replace the code (step 2), then go to **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**. The URL stays the same, and the existing Sirikh tab is upgraded in place: the Type, Balance and ID columns are added, and old rows count as Joint.
+### 2. Website (once)
 
-### 2. Website (GitHub Pages), once
-1. In the repo: **Add file → Upload files**, drag in all the files, and click **Commit changes**.
-2. **Settings → Pages** → Source: **Deploy from a branch**, Branch: **main**, folder **/ (root)**, then **Save**.
-   (If Save is grayed out, it is already set up.)
-3. Wait 1–2 minutes (watch the **Actions** tab for a green ✓). The app is at `https://<username>.github.io/<repo>/`.
+1. In the GitHub repo, go to **Add file > Upload files**, add all files, and click **Commit changes**.
+2. Go to **Settings > Pages**. Set Source to **Deploy from a branch**, Branch to **main**, folder **/ (root)**, and click **Save**. If Save is grayed out, this is already set.
+3. After 1 to 2 minutes (check the **Actions** tab for a green check), the app is live at `https://<username>.github.io/<repo>/`.
 
 ### 3. Each iPhone
-1. Open the Pages link in **Safari** → **Share → Add to Home Screen → Add**.
-2. Open **Sirikh** from the home screen → ⚙︎ → paste the Web app URL and the key → **Save**. You should see "Connected ✓".
-   (The home-screen app has its own storage, separate from Safari, so do this inside the installed app.)
+
+1. Open the site in **Safari**, tap **Share > Add to Home Screen > Add**.
+2. Open Sirikh from the home screen, tap the gear icon, and enter the Web app URL and the passphrase. You should see "Connected". Do this in the home screen app, not in Safari, because the two keep separate storage.
 3. Tap **Set balance** and enter the starting amount.
 
 ## Updating
 
-- **App files** (`index.html`, `app.js`, …): upload the new versions to GitHub. Phones pick them up the next time the app opens with a connection.
-- **`Code.gs`**: paste the new version into Apps Script, then **Manage deployments → Edit → New version**.
+- **App files:** upload the new versions to GitHub. Phones get them the next time the app opens online.
+- **`Code.gs`:** paste the new code, then go to **Deploy > Manage deployments > Edit (pencil) > Version: New version > Deploy**. The URL stays the same. An older Sirikh tab is upgraded in place, and its old rows count as Joint.
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| Site shows 404 | Check that `index.html` is at the top level of the repo and Pages is set to main / root. Make any new commit to start a build, then wait 1–2 min. |
-| "Wrong key" | The key in ⚙︎ must match `SIRIKH_KEY` exactly (it's case-sensitive). |
-| "The web app URL did not answer correctly" | Use the URL that ends in `/exec` (not `/dev`), and make sure access is set to **Anyone**. |
-| "SIRIKH_KEY is not set" | Add the script property (Setup 1, step 3). |
-| Changes to `Code.gs` don't apply | Deploy a **New version** of the existing deployment. |
-| Balance looks wrong | Check the Type column in the Sirikh tab; it recalculates as soon as you fix a row. |
-| Old icon on the home screen | Delete the icon and add it again from Safari. |
+| Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
+| "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
+| "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
+| "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
+| `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
+| Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |
+| Old home screen icon | Remove it and add it again from Safari. |
