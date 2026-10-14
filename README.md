@@ -6,16 +6,27 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 
 ## Features
 
-- **Entry form:** Date (calendar, defaults to today), Category (store name, with suggestions), Amount, Paid By (V or K), Type (Joint or Personal), Notes.
+- **Entry form:** Date (calendar, defaults to today), Category (store name, with suggestions), Amount, Paid By (V or K), Type (Joint, Fixed or Personal), Notes.
 - **Monthly budget:**
   - **Set monthly budget** starts a new budget, for example $705 on the 1st.
-  - **Joint** expenses are deducted the moment they are saved; **Personal** expenses are logged only.
+  - **Joint** expenses are deducted the moment they are saved.
+  - **Fixed** bills (rent, utilities) and **Personal** expenses are not taken from the budget.
   - The card shows how much is left, a progress bar, budget, spent, and how much you can spend per day for the rest of the month.
   - A negative amount is a refund and is added back.
 - **Who owes whom:** the same block as the monthly tabs, for joint expenses since the budget was set:
   - V paid, K paid, Total.
   - V's share and K's share (what each paid minus half the total), and the Equal split.
-  - A plain line such as "V owes K $140.50".
+  - A plain line such as "V owes K $140.50", plus an overall line that includes fixed bills.
+- **Fixed bills:** rent, utilities and other bills are tracked separately, with V paid, K paid, Total, and who owes whom for fixed bills.
+- **Color coding** (in the app and the sheet):
+
+  | Type | Color |
+  |---|---|
+  | Joint | No color |
+  | Personal, V | Light blue |
+  | Personal, K | Darker blue |
+  | Fixed, Rent | Orange |
+  | Fixed, other bills | Lighter shades of orange, one per bill name |
 - **Recent list:** the last 5 entries with the running balance. Tap **x** to delete one.
 - **Offline:** entries saved without signal are kept on the phone and synced later. An hourglass marks unsynced entries.
 - **Security:** a shared key protects writes. The repo contains no sheet ID, key, or data.
@@ -49,21 +60,26 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 | 2026-10-01 | Balance set | $705.00 | Both | October budget | Set balance | $705.00 | |
 | 2026-10-02 | Costco | $45.20 | K | Paneer, grapes | Joint | $659.80 | |
 | 2026-10-02 | Haircut | $20.00 | V | | Personal | $659.80 | |
+| 2026-10-01 | Rent | $1,800.00 | V | | Fixed | $659.80 | |
 
-- **Type** is one of `Joint`, `Personal`, `Add funds`, `Set balance`. Blank counts as Joint.
+- **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance` (or `Add funds` typed by hand). Blank counts as Joint.
+- **Row colors** are set by the script from Type, Paid By and Category, and update after hand edits.
 - **Balance ($)** is recalculated top to bottom by the script, including after hand edits to Amount or Type.
 - **ID** prevents duplicates and identifies rows to delete. Do not edit it.
 - **Set balance** rows start a new budget. Everything below the most recent one belongs to the current month.
 
-Summary block in **J1:O4**, updated on every save, for the current budget:
+Summary block in **J1:O7**, updated on every save, for the current budget, with a color legend below it in J9:J14:
 
 | V | K | Total | | Budget | 705 |
 |---|---|---|---|---|---|
 | 211.43 | 484.41 | 695.84 | | Remaining | 9.16 |
 | **V's Share** | **K's Share** | **Equal Split** | | Since | 2026-10-01 |
 | -136.49 | 136.49 | 347.92 | | Settle up | V owes K $136.49 |
+| | | | | | |
+| **Fixed V** | **Fixed K** | **Fixed Total** | | Fixed settle | K owes V $840.00 |
+| 1800 | 120 | 1920 | | Overall | K owes V $703.51 |
 
-Do not type in J1:O4; the script overwrites it.
+Do not type in J1:O14; the script overwrites it.
 
 ## Setup
 

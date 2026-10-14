@@ -60,7 +60,23 @@
         </tbody>
       </table>
       <div id="settleLine" class="settle"></div>
+      <div id="overallLine" class="overall" hidden></div>
       <div class="muted">Joint expenses only. Share = what each paid minus half the total.</div>
+    </section>
+
+    <section class="card fixed-card" id="fixedCard" aria-labelledby="fixedLabel" hidden>
+      <div class="section-head">
+        <h2 id="fixedLabel">Fixed bills</h2>
+        <span class="muted">Rent, utilities</span>
+      </div>
+      <table class="split">
+        <tbody>
+          <tr><th scope="col">V paid</th><th scope="col">K paid</th><th scope="col">Total</th></tr>
+          <tr><td id="fixedV"></td><td id="fixedK"></td><td id="fixedTotal"></td></tr>
+        </tbody>
+      </table>
+      <div id="fixedSettle" class="settle"></div>
+      <div class="muted">Tracked separately. Not taken from the monthly budget.</div>
     </section>
 
     <form id="expenseForm" class="card" autocomplete="off" novalidate>
@@ -92,10 +108,12 @@
         <div class="seg">
           <input type="radio" name="type" id="typeJoint" value="Joint" checked>
           <label for="typeJoint">Joint</label>
+          <input type="radio" name="type" id="typeFixed" value="Fixed">
+          <label for="typeFixed">Fixed</label>
           <input type="radio" name="type" id="typePersonal" value="Personal">
           <label for="typePersonal">Personal</label>
         </div>
-        <div id="typeHint" class="muted hint">Joint expenses come out of the main balance.</div>
+        <div id="typeHint" class="muted hint"></div>
       </fieldset>
 
       <label>Notes

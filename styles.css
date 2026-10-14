@@ -84,6 +84,19 @@ main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
 .split tr:last-child td { border-bottom: none; }
 .split .pos { color: var(--pos); }
 .split .neg { color: var(--err); }
+.overall { font-weight: 600; margin-bottom: 4px; }
+.fixed-card { border-left: 5px solid #fdba74; }
+
+/* Row colors, same as the sheet: Personal blue (V light, K darker), Fixed orange (Rent strongest) */
+.recent li { border-left: 5px solid transparent; padding-left: 8px; }
+.recent li.c-personal-v { border-left-color: #dbeafe; }
+.recent li.c-personal-k { border-left-color: #93c5fd; }
+.recent li.c-rent { border-left-color: #fdba74; }
+.recent li.c-fixed { border-left-color: #fed7aa; }
+.recent li.c-personal-v .tag { background: #dbeafe; color: #1c1917; }
+.recent li.c-personal-k .tag { background: #93c5fd; color: #1c1917; }
+.recent li.c-rent .tag { background: #fdba74; color: #1c1917; }
+.recent li.c-fixed .tag { background: #fed7aa; color: #1c1917; }
 
 /* Form */
 label, legend {
@@ -131,7 +144,7 @@ input.invalid { border-color: var(--err); }
 /* Joint / Personal switch */
 .seg {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   background: var(--field);
   border: 1px solid var(--border);
   border-radius: 10px;

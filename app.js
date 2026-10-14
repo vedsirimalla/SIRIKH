@@ -6,7 +6,20 @@
     'Costco', 'Walmart', 'Harris Teeter', "Trader Joe's", 'Target', 'Shell',
     'Indian Store', 'Whole Foods', 'Amazon', 'Taco Bell', 'Subway', 'Dollar Tree',
   ];
-  const TYPE_LABELS = { 'Joint': 'Joint', 'Personal': 'Personal', 'Add funds': 'Funds added', 'Set balance': 'Budget set' };
+  const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Internet', 'Water', 'Phone bill', 'Insurance'];
+  const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Add funds': 'Funds added', 'Set balance': 'Budget set' };
+  const TYPE_HINTS = {
+    Joint: 'Comes out of the monthly budget and counts in who owes whom.',
+    Fixed: 'Rent, utilities and other bills. Tracked separately; not taken from the monthly budget.',
+    Personal: 'Logged only. Not in the budget or the split.',
+  };
+
+  // Matches the row colors in the sheet: Personal blue (V light, K darker), Fixed orange (Rent strongest).
+  function colorClass(r) {
+    if (r.type === 'Personal') return r.paidBy === 'K' ? 'c-personal-k' : 'c-personal-v';
+    if (r.type === 'Fixed') return /\brent\b/i.test(r.category) ? 'c-rent' : 'c-fixed';
+    return '';
+  }
 
   // ---------- Storage (this phone only)
   const store = {
@@ -71,7 +84,10 @@
   // ---------- Categories: defaults plus what this phone has typed before, most used first
   function renderCategories() {
     const counts = store.get('categories', {});
-    const names = new Set([...Object.keys(counts).sort((a, b) => counts[b] - counts[a]), ...DEFAULT_CATEGORIES]);
+    const learned = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+    const names = new Set(selectedType() === 'Fixed'
+      ? [...FIXED_CATEGORIES, ...learned]
+      : [...learned, ...DEFAULT_CATEGORIES, ...FIXED_CATEGORIES]);
     const list = $('categoryList');
     list.innerHTML = '';
     for (const name of names) {
@@ -107,7 +123,7 @@
   function estimate() {
     const state = getState();
     const recent = state ? state.recent || [] : [];
-    const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, ...(state && state.period) };
+    const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, ...(state && state.period) };
     let balance = state ? Number(state.balance) || 0 : 0;
     let hasBalance = state ? !!state.hasBalance : false;
 
@@ -120,6 +136,11 @@
         if (e.paidBy === 'V') p.v += amt;
         if (e.paidBy === 'K') p.k += amt;
       }
+      if (e.type === 'Fixed') {
+        p.fixed += amt;
+        if (e.paidBy === 'V') p.fv += amt;
+        if (e.paidBy === 'K') p.fk += amt;
+      }
     };
 
     const queue = getQueue();
@@ -127,7 +148,7 @@
       if (op.op === 'add' && op.entry.type === 'Set balance') {
         balance = op.entry.amount;
         hasBalance = true;
-        Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0 });
+        Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0 });
       } else if (op.op === 'add') {
         apply(op.entry, 1);
       } else {
@@ -135,7 +156,7 @@
         if (e) apply(e, -1);
       }
     }
-    for (const k of ['start', 'added', 'spent', 'v', 'k']) p[k] = round2(p[k]);
+    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk']) p[k] = round2(p[k]);
     return { balance: round2(balance), hasBalance, unsynced: queue.length, period: p };
   }
 
@@ -201,8 +222,26 @@
       $(id).className = n >= 0.01 ? 'pos' : n <= -0.01 ? 'neg' : '';
     }
     $('splitSince').textContent = 'Since ' + prettyDate(p.since);
-    $('settleLine').textContent = vShare <= -0.01 ? `V owes K ${money(-vShare)}`
-      : kShare <= -0.01 ? `K owes V ${money(-kShare)}` : 'V and K are even';
+    $('settleLine').textContent = settleText(vShare, kShare);
+
+    const fSplit = round2(p.fixed / 2);
+    const fvShare = round2(p.fv - fSplit);
+    const fkShare = round2(p.fk - fSplit);
+    const hasFixed = p.fixed !== 0 || p.fv !== 0 || p.fk !== 0;
+    $('fixedCard').hidden = !hasFixed;
+    $('overallLine').hidden = !hasFixed;
+    if (!hasFixed) return;
+    $('fixedV').textContent = money(p.fv);
+    $('fixedK').textContent = money(p.fk);
+    $('fixedTotal').textContent = money(p.fixed);
+    $('fixedSettle').textContent = settleText(fvShare, fkShare);
+    $('overallLine').textContent = 'Including fixed bills: ' + settleText(round2(vShare + fvShare), round2(kShare + fkShare));
+  }
+
+  function settleText(vShare, kShare) {
+    if (vShare <= -0.01) return `V owes K ${money(-vShare)}`;
+    if (kShare <= -0.01) return `K owes V ${money(-kShare)}`;
+    return 'V and K are even';
   }
 
   function renderRecent() {
@@ -223,7 +262,7 @@
     }
     for (const r of rows) {
       const li = document.createElement('li');
-      if (r.pending) li.className = 'pending';
+      li.className = [colorClass(r), r.pending ? 'pending' : ''].filter(Boolean).join(' ');
 
       const body = document.createElement('div');
       body.className = 'body';
@@ -359,16 +398,17 @@
 
   // ---------- Expense form
   function selectedType() {
-    return $('typePersonal').checked ? 'Personal' : 'Joint';
+    const checked = document.querySelector('input[name="type"]:checked');
+    return checked ? checked.value : 'Joint';
   }
 
   function updateTypeHint() {
-    $('typeHint').textContent = selectedType() === 'Joint'
-      ? 'Joint expenses come out of the main balance.'
-      : 'Personal expenses are logged but do not change the balance.';
+    const type = selectedType();
+    $('typeHint').textContent = TYPE_HINTS[type];
+    $('category').placeholder = type === 'Fixed' ? 'Rent, Utilities, Internet…' : 'Costco, Walmart, Shell…';
+    renderCategories();
   }
-  $('typeJoint').addEventListener('change', updateTypeHint);
-  $('typePersonal').addEventListener('change', updateTypeHint);
+  for (const id of ['typeJoint', 'typeFixed', 'typePersonal']) $(id).addEventListener('change', updateTypeHint);
 
   function clearInvalid(form) {
     form.querySelectorAll('.invalid').forEach((el) => el.classList.remove('invalid'));
@@ -416,6 +456,7 @@
     $('saveBtn').disabled = false;
     const left = estimate();
     report(status, `Saved ✓ ${category} ${money(amount)}` +
+      (entry.type === 'Fixed' ? ' · Fixed bill' : '') +
       (entry.type === 'Joint' && left.hasBalance
         ? left.balance < 0 ? ` · ${money(-left.balance)} over budget` : ` · ${money(left.balance)} left`
         : ''));

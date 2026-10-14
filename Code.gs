@@ -2,35 +2,39 @@
  * Sirikh backend (Google Apps Script, attached to the expense spreadsheet).
  *
  * Setup (once):
- *   1. Open the spreadsheet → Extensions → Apps Script.
- *   2. Replace everything in Code.gs with this file → Save.
- *   3. Project Settings (gear) → Script properties → Add: SIRIKH_KEY = <your passphrase>.
- *   4. Deploy → New deployment → Web app → Execute as: Me, Who has access: Anyone → Deploy.
+ *   1. Open the spreadsheet > Extensions > Apps Script.
+ *   2. Replace everything in Code.gs with this file > Save.
+ *   3. Project Settings (gear) > Script properties > Add: SIRIKH_KEY = <your passphrase>.
+ *   4. Deploy > New deployment > Web app > Execute as: Me, Who has access: Anyone > Deploy.
  * After changing this file later:
- *   Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy (the /exec URL stays the same).
+ *   Deploy > Manage deployments > Edit (pencil) > Version: New version > Deploy (the /exec URL stays the same).
  *
  * Tab "Sirikh" (created automatically):
  *   Date | Category | Amount ($) | Paid By | Notes | Type | Balance ($) | ID
  *
  * Type is one of:
- *   Joint        shared expense, deducted from the main balance
- *   Personal     logged only, balance unchanged
- *   Add funds    money added to the main balance
- *   Set balance  balance becomes exactly this amount (for example at the start of a month)
- * Balance ($) is recalculated by this script from top to bottom, so edits made by hand
- * in the tab (amount or type) are picked up automatically. Negative amounts are refunds.
+ *   Joint        shared day-to-day expense, deducted from the monthly budget      (no color)
+ *   Fixed        rent, utilities and other bills, tracked separately from the budget (orange)
+ *   Personal     logged only                                                     (blue: V light, K darker)
+ *   Set balance  starts a new monthly budget
+ *   Add funds    adds to the budget (only from hand edits; the app no longer offers it)
+ * Balance ($) and the row colors are recalculated by this script from top to bottom, so edits
+ * made by hand in the tab are picked up automatically. Negative amounts are refunds.
  *
- * A summary of the current budget period (since the last "Set balance" row) is kept in J1:O4:
- *   V | K | Total          Budget    | amount
- *   (joint paid by each)   Remaining | amount
- *   V's Share | K's Share | Equal Split   Since | date
- *   (paid minus half)      Settle up | "V owes K $x"
+ * J1:O7 holds a summary of the current period (since the last "Set balance" row), with a
+ * color legend below it. The script overwrites that area.
  */
 
 const TAB_NAME = 'Sirikh';
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Paid By', 'Notes', 'Type', 'Balance ($)', 'ID'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7 };
-const TYPES = ['Joint', 'Personal', 'Add funds', 'Set balance'];
+const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance'];
+const COLORS = {
+  personalV: '#dbeafe', // light blue
+  personalK: '#93c5fd', // darker blue
+  rent: '#fdba74',      // strongest orange
+  fixed: ['#fed7aa', '#ffe0c2', '#fcc896', '#ffedd5'], // other fixed bills, one shade per category
+};
 const RECENT_COUNT = 5;
 const SUMMARY_COL = 10; // column J
 
@@ -162,7 +166,7 @@ function isEmptyRow_(r) {
   return r[C.DATE] === '' && r[C.CATEGORY] === '' && r[C.AMOUNT] === '';
 }
 
-// Recalculates Type (blank → Joint) and Balance ($) for every row; writes only if something changed.
+// Recalculates Type (blank > Joint), Balance ($) and row colors; writes only what changed.
 function recompute_(sheet) {
   const rows = readRows_(sheet);
   if (!rows.length) return rows;
@@ -188,7 +192,34 @@ function recompute_(sheet) {
     sheet.getRange(2, C.TYPE + 1, rows.length, 2).setValues(rows.map((r) => [r[C.TYPE], r[C.BALANCE]]));
     sheet.getRange(2, C.BALANCE + 1, rows.length, 1).setNumberFormat('$#,##0.00');
   }
+  colorRows_(sheet, rows);
   return rows;
+}
+
+function rowColor_(r) {
+  if (isEmptyRow_(r)) return null;
+  if (r[C.TYPE] === 'Personal') return r[C.PAID_BY] === 'K' ? COLORS.personalK : COLORS.personalV;
+  if (r[C.TYPE] === 'Fixed') {
+    const name = String(r[C.CATEGORY]).trim().toLowerCase();
+    if (/\brent\b/.test(name)) return COLORS.rent;
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 997;
+    return COLORS.fixed[hash % COLORS.fixed.length];
+  }
+  return null; // Joint and budget rows stay plain
+}
+
+function colorRows_(sheet, rows) {
+  const range = sheet.getRange(2, 1, rows.length, HEADERS.length);
+  const current = range.getBackgrounds();
+  let changed = false;
+  const wanted = rows.map((r, i) => {
+    const color = rowColor_(r);
+    const have = String(current[i][0]).toLowerCase();
+    if ((color || '#ffffff') !== have) changed = true;
+    return new Array(HEADERS.length).fill(color);
+  });
+  if (changed) range.setBackgrounds(wanted);
 }
 
 function state_(sheet) {
@@ -222,7 +253,7 @@ function period_(rows) {
   let start = -1;
   data.forEach((r, i) => { if (r[C.TYPE] === 'Set balance') start = i; });
 
-  const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0 };
+  const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0 };
   if (start !== -1) {
     p.since = formatDate_(data[start][C.DATE], tz);
     p.start = toNumber_(data[start][C.AMOUNT]);
@@ -235,9 +266,20 @@ function period_(rows) {
       if (r[C.PAID_BY] === 'V') p.v += amount;
       if (r[C.PAID_BY] === 'K') p.k += amount;
     }
+    if (r[C.TYPE] === 'Fixed') {
+      p.fixed += amount;
+      if (r[C.PAID_BY] === 'V') p.fv += amount;
+      if (r[C.PAID_BY] === 'K') p.fk += amount;
+    }
   });
   Object.keys(p).forEach((k) => { if (typeof p[k] === 'number') p[k] = round2_(p[k]); });
   return p;
+}
+
+function settleText_(vShare, kShare) {
+  if (vShare <= -0.01) return 'V owes K $' + (-vShare).toFixed(2);
+  if (kShare <= -0.01) return 'K owes V $' + (-kShare).toFixed(2);
+  return 'Even';
 }
 
 // Same layout as the monthly blocks in the other tabs: share = paid minus half of the total.
@@ -246,20 +288,36 @@ function writeSummary_(sheet, p) {
   const split = round2_(p.spent / 2);
   const vShare = round2_(p.v - split);
   const kShare = round2_(p.k - split);
-  let settle = 'Even';
-  if (vShare <= -0.01) settle = 'V owes K $' + (-vShare).toFixed(2);
-  else if (kShare <= -0.01) settle = 'K owes V $' + (-kShare).toFixed(2);
-  sheet.getRange(1, SUMMARY_COL, 4, 6).setValues([
+  const fSplit = round2_(p.fixed / 2);
+  const fvShare = round2_(p.fv - fSplit);
+  const fkShare = round2_(p.fk - fSplit);
+
+  const area = sheet.getRange(1, SUMMARY_COL, 14, 6);
+  area.clearFormat(); // rows deleted near the top can shift old formatting into this area
+  area.setValues([
     ['V', 'K', 'Total', '', 'Budget', budget],
     [p.v, p.k, p.spent, '', 'Remaining', round2_(budget - p.spent)],
     ["V's Share", "K's Share", 'Equal Split', '', 'Since', p.since],
-    [vShare, kShare, split, '', 'Settle up', settle],
+    [vShare, kShare, split, '', 'Settle up', settleText_(vShare, kShare)],
+    ['', '', '', '', '', ''],
+    ['Fixed V', 'Fixed K', 'Fixed Total', '', 'Fixed settle', settleText_(fvShare, fkShare)],
+    [p.fv, p.fk, p.fixed, '', 'Overall', settleText_(round2_(vShare + fvShare), round2_(kShare + fkShare))],
+    ['', '', '', '', '', ''],
+    ['Colors', '', '', '', '', ''],
+    ['Joint', 'no color', '', '', '', ''],
+    ['Personal V', '', '', '', '', ''],
+    ['Personal K', '', '', '', '', ''],
+    ['Fixed: Rent', '', '', '', '', ''],
+    ['Fixed: other', '', '', '', '', ''],
   ]);
-  sheet.getRange(2, SUMMARY_COL, 1, 3).setNumberFormat('$#,##0.00');
-  sheet.getRange(4, SUMMARY_COL, 1, 3).setNumberFormat('$#,##0.00');
-  sheet.getRange(1, SUMMARY_COL + 5, 2, 1).setNumberFormat('$#,##0.00');
-  sheet.getRange(1, SUMMARY_COL, 1, 3).setFontWeight('bold');
-  sheet.getRange(3, SUMMARY_COL, 1, 3).setFontWeight('bold');
+  [[2, 1, 3], [4, 1, 3], [7, 1, 3], [1, 6, 1], [2, 6, 1]].forEach(([row, offset, width]) => {
+    sheet.getRange(row, SUMMARY_COL + offset - 1, 1, width).setNumberFormat('$#,##0.00');
+  });
+  [1, 3, 6, 9].forEach((row) => sheet.getRange(row, SUMMARY_COL, 1, 3).setFontWeight('bold'));
+  sheet.getRange(11, SUMMARY_COL).setBackground(COLORS.personalV);
+  sheet.getRange(12, SUMMARY_COL).setBackground(COLORS.personalK);
+  sheet.getRange(13, SUMMARY_COL).setBackground(COLORS.rent);
+  sheet.getRange(14, SUMMARY_COL).setBackground(COLORS.fixed[0]);
 }
 
 function normalizeType_(v) {
