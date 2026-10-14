@@ -21,20 +21,30 @@
  * Balance ($) and the row colors are recalculated by this script from top to bottom, so edits
  * made by hand in the tab are picked up automatically. Negative amounts are refunds.
  *
- * J1:O7 holds a summary of the current period (since the last "Set balance" row), with a
- * color legend below it. The script overwrites that area.
+ * Columns J onward hold the same tables as the app, rebuilt on every save:
+ *   Who owes whom, Fixed bills and Monthly budget for the current period (since the last
+ *   "Set balance" row), a color legend, and a History table with one row per budget period.
+ * The script overwrites that area, so do not type in it.
  */
 
 const TAB_NAME = 'Sirikh';
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Paid By', 'Notes', 'Type', 'Balance ($)', 'ID'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance'];
+// The app offers only these fixed bills; each has its own shade of orange (Rent strongest).
+const FIXED_COLORS = {
+  'Rent': '#fdba74',
+  'Utilities': '#fed7aa',
+  'Electricity': '#fcc896',
+  'Wi-Fi': '#ffe0c2',
+  'Misc': '#ffedd5',
+};
 const COLORS = {
   personalV: '#dbeafe', // light blue
   personalK: '#93c5fd', // darker blue
-  rent: '#fdba74',      // strongest orange
-  fixed: ['#fed7aa', '#ffe0c2', '#fcc896', '#ffedd5'], // other fixed bills, one shade per category
+  fixedOther: '#ffedd5', // a fixed bill typed by hand with another name
 };
+const MONEY = '$#,##0.00';
 const RECENT_COUNT = 5;
 const SUMMARY_COL = 10; // column J
 
@@ -69,7 +79,7 @@ function doPost(e) {
 function onEdit(e) {
   const sheet = e && e.range && e.range.getSheet();
   if (!sheet || sheet.getName() !== TAB_NAME || e.range.getColumn() >= SUMMARY_COL) return;
-  writeSummary_(sheet, period_(recompute_(sheet)));
+  writeSummary_(sheet, periods_(recompute_(sheet)));
 }
 
 function checkKey_(key) {
@@ -201,10 +211,8 @@ function rowColor_(r) {
   if (r[C.TYPE] === 'Personal') return r[C.PAID_BY] === 'K' ? COLORS.personalK : COLORS.personalV;
   if (r[C.TYPE] === 'Fixed') {
     const name = String(r[C.CATEGORY]).trim().toLowerCase();
-    if (/\brent\b/.test(name)) return COLORS.rent;
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % 997;
-    return COLORS.fixed[hash % COLORS.fixed.length];
+    const key = Object.keys(FIXED_COLORS).find((k) => k.toLowerCase() === name);
+    return key ? FIXED_COLORS[key] : COLORS.fixedOther;
   }
   return null; // Joint and budget rows stay plain
 }
@@ -226,8 +234,9 @@ function state_(sheet) {
   const rows = recompute_(sheet);
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const data = rows.filter((r) => !isEmptyRow_(r));
-  const period = period_(rows);
-  writeSummary_(sheet, period);
+  const all = periods_(rows);
+  const period = all.length ? all[all.length - 1] : emptyPeriod_();
+  writeSummary_(sheet, all);
   return {
     ok: true,
     balance: data.length ? data[data.length - 1][C.BALANCE] : 0,
@@ -246,20 +255,25 @@ function state_(sheet) {
   };
 }
 
-// Totals for the current period, which starts at the most recent "Set balance" row.
-function period_(rows) {
-  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
-  const data = rows.filter((r) => !isEmptyRow_(r));
-  let start = -1;
-  data.forEach((r, i) => { if (r[C.TYPE] === 'Set balance') start = i; });
+function emptyPeriod_() {
+  return { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0 };
+}
 
-  const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0 };
-  if (start !== -1) {
-    p.since = formatDate_(data[start][C.DATE], tz);
-    p.start = toNumber_(data[start][C.AMOUNT]);
-  }
-  data.slice(start + 1).forEach((r) => {
+// One entry per budget period. A period starts at a "Set balance" row and runs until the next one.
+function periods_(rows) {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const list = [];
+  let p = null;
+  rows.filter((r) => !isEmptyRow_(r)).forEach((r) => {
     const amount = toNumber_(r[C.AMOUNT]);
+    if (r[C.TYPE] === 'Set balance') {
+      p = emptyPeriod_();
+      p.since = formatDate_(r[C.DATE], tz);
+      p.start = amount;
+      list.push(p);
+      return;
+    }
+    if (!p) return; // rows before the first budget are not part of any period
     if (r[C.TYPE] === 'Add funds') p.added += amount;
     if (r[C.TYPE] === 'Joint') {
       p.spent += amount;
@@ -272,8 +286,8 @@ function period_(rows) {
       if (r[C.PAID_BY] === 'K') p.fk += amount;
     }
   });
-  Object.keys(p).forEach((k) => { if (typeof p[k] === 'number') p[k] = round2_(p[k]); });
-  return p;
+  list.forEach((x) => Object.keys(x).forEach((k) => { if (typeof x[k] === 'number') x[k] = round2_(x[k]); }));
+  return list;
 }
 
 function settleText_(vShare, kShare) {
@@ -282,42 +296,91 @@ function settleText_(vShare, kShare) {
   return 'Even';
 }
 
-// Same layout as the monthly blocks in the other tabs: share = paid minus half of the total.
-function writeSummary_(sheet, p) {
-  const budget = round2_(p.start + p.added);
+// Share = what each paid minus half of the total (same as the monthly blocks in the other tabs).
+function shares_(p) {
   const split = round2_(p.spent / 2);
-  const vShare = round2_(p.v - split);
-  const kShare = round2_(p.k - split);
   const fSplit = round2_(p.fixed / 2);
-  const fvShare = round2_(p.fv - fSplit);
-  const fkShare = round2_(p.fk - fSplit);
+  const s = {
+    split: split,
+    vShare: round2_(p.v - split),
+    kShare: round2_(p.k - split),
+    fSplit: fSplit,
+    fvShare: round2_(p.fv - fSplit),
+    fkShare: round2_(p.fk - fSplit),
+  };
+  s.settle = settleText_(s.vShare, s.kShare);
+  s.fixedSettle = settleText_(s.fvShare, s.fkShare);
+  s.overall = settleText_(round2_(s.vShare + s.fvShare), round2_(s.kShare + s.fkShare));
+  return s;
+}
 
-  const area = sheet.getRange(1, SUMMARY_COL, 14, 6);
-  area.clearFormat(); // rows deleted near the top can shift old formatting into this area
-  area.setValues([
-    ['V', 'K', 'Total', '', 'Budget', budget],
-    [p.v, p.k, p.spent, '', 'Remaining', round2_(budget - p.spent)],
-    ["V's Share", "K's Share", 'Equal Split', '', 'Since', p.since],
-    [vShare, kShare, split, '', 'Settle up', settleText_(vShare, kShare)],
-    ['', '', '', '', '', ''],
-    ['Fixed V', 'Fixed K', 'Fixed Total', '', 'Fixed settle', settleText_(fvShare, fkShare)],
-    [p.fv, p.fk, p.fixed, '', 'Overall', settleText_(round2_(vShare + fvShare), round2_(kShare + fkShare))],
-    ['', '', '', '', '', ''],
-    ['Colors', '', '', '', '', ''],
-    ['Joint', 'no color', '', '', '', ''],
-    ['Personal V', '', '', '', '', ''],
-    ['Personal K', '', '', '', '', ''],
-    ['Fixed: Rent', '', '', '', '', ''],
-    ['Fixed: other', '', '', '', '', ''],
-  ]);
-  [[2, 1, 3], [4, 1, 3], [7, 1, 3], [1, 6, 1], [2, 6, 1]].forEach(([row, offset, width]) => {
-    sheet.getRange(row, SUMMARY_COL + offset - 1, 1, width).setNumberFormat('$#,##0.00');
+// Rebuilds the tables in columns J onward: the same "Who owes whom" and "Fixed bills" tables
+// as the app, the monthly budget, a color legend, and a history row for every budget period.
+function writeSummary_(sheet, periods) {
+  const WIDTH = 11; // J:T
+  const p = periods.length ? periods[periods.length - 1] : emptyPeriod_();
+  const s = shares_(p);
+  const budget = round2_(p.start + p.added);
+  const blank = () => new Array(WIDTH).fill('');
+  const line = (...cells) => cells.concat(new Array(WIDTH - cells.length).fill(''));
+
+  const out = [
+    line('Who owes whom', '', '', p.since ? 'Since ' + p.since : 'No budget set'),    // 1
+    line('V paid', 'K paid', 'Total'),                                                // 2
+    line(p.v, p.k, p.spent),                                                          // 3
+    line("V's share", "K's share", 'Equal split'),                                    // 4
+    line(s.vShare, s.kShare, s.split),                                                // 5
+    line('Settle up', s.settle),                                                      // 6
+    line('Including fixed bills', s.overall),                                         // 7
+    blank(),                                                                          // 8
+    line('Fixed bills'),                                                              // 9
+    line('V paid', 'K paid', 'Total'),                                                // 10
+    line(p.fv, p.fk, p.fixed),                                                        // 11
+    line('Settle up', s.fixedSettle),                                                 // 12
+    blank(),                                                                          // 13
+    line('Monthly budget'),                                                           // 14
+    line('Budget', 'Spent', 'Remaining'),                                             // 15
+    line(budget, p.spent, round2_(budget - p.spent)),                                 // 16
+    blank(),                                                                          // 17
+    line('Colors'),                                                                   // 18
+    line('Joint', 'no color'),                                                        // 19
+    line('Personal V'),                                                               // 20
+    line('Personal K'),                                                               // 21
+  ];
+  const legendStart = out.length + 1;
+  Object.keys(FIXED_COLORS).forEach((name) => out.push(line('Fixed: ' + name)));
+  out.push(blank());
+  const historyTitle = out.length + 1;
+  out.push(line('History'));
+  out.push(line('Since', 'Budget', 'Joint spent', 'V paid', 'K paid', "V's share", "K's share",
+    'Settle up', 'Fixed total', 'Fixed settle', 'Overall'));
+  const historyStart = out.length + 1;
+  periods.slice().reverse().forEach((x) => {
+    const h = shares_(x);
+    out.push([x.since, round2_(x.start + x.added), x.spent, x.v, x.k, h.vShare, h.kShare,
+      h.settle, x.fixed, h.fixedSettle, h.overall]);
   });
-  [1, 3, 6, 9].forEach((row) => sheet.getRange(row, SUMMARY_COL, 1, 3).setFontWeight('bold'));
-  sheet.getRange(11, SUMMARY_COL).setBackground(COLORS.personalV);
-  sheet.getRange(12, SUMMARY_COL).setBackground(COLORS.personalK);
-  sheet.getRange(13, SUMMARY_COL).setBackground(COLORS.rent);
-  sheet.getRange(14, SUMMARY_COL).setBackground(COLORS.fixed[0]);
+
+  // Clear the whole area first: rows deleted near the top can shift old values and colors into it.
+  const last = Math.max(sheet.getLastRow(), out.length);
+  const area = sheet.getRange(1, SUMMARY_COL, last, WIDTH);
+  area.clearContent();
+  area.clearFormat();
+  sheet.getRange(1, SUMMARY_COL, out.length, WIDTH).setValues(out);
+
+  const cell = (row, col, rows, cols) => sheet.getRange(row, SUMMARY_COL + col, rows || 1, cols || 1);
+  [3, 5, 11, 16].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
+  [1, 9, 14, 18, historyTitle].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
+  [2, 4, 10, 15, historyTitle + 1].forEach((row) => cell(row, 0, 1, row === historyTitle + 1 ? WIDTH : 3)
+    .setFontWeight('bold').setBackground('#f3f4f6'));
+  [6, 7, 12].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
+  cell(20, 0).setBackground(COLORS.personalV);
+  cell(21, 0).setBackground(COLORS.personalK);
+  Object.keys(FIXED_COLORS).forEach((name, i) => cell(legendStart + i, 0).setBackground(FIXED_COLORS[name]));
+  if (periods.length) {
+    cell(historyStart, 1, periods.length, 6).setNumberFormat(MONEY);
+    cell(historyStart, 8, periods.length, 1).setNumberFormat(MONEY);
+  }
 }
 
 function normalizeType_(v) {

@@ -6,7 +6,10 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 
 ## Features
 
-- **Entry form:** Date (calendar, defaults to today), Category (store name, with suggestions), Amount, Paid By (V or K), Type (Joint, Fixed or Personal), Notes.
+- **Entry form:** Date (calendar, defaults to today), Type (Joint, Fixed or Personal), Category, Amount, Paid By (V or K), Notes.
+  - **Joint and Personal:** Category is a plain typing field (no dropdown).
+  - **Fixed:** Category is replaced by buttons for exactly five bills: Rent, Utilities, Electricity, Wi-Fi, Misc.
+  - The text under Type explains the selected type.
 - **Monthly budget:**
   - **Set monthly budget** starts a new budget, for example $705 on the 1st.
   - **Joint** expenses are deducted the moment they are saved.
@@ -17,7 +20,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - V paid, K paid, Total.
   - V's share and K's share (what each paid minus half the total), and the Equal split.
   - A plain line such as "V owes K $140.50", plus an overall line that includes fixed bills.
-- **Fixed bills:** rent, utilities and other bills are tracked separately, with V paid, K paid, Total, and who owes whom for fixed bills.
+- **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total, and who owes whom for fixed bills.
 - **Color coding** (in the app and the sheet):
 
   | Type | Color |
@@ -25,8 +28,8 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   | Joint | No color |
   | Personal, V | Light blue |
   | Personal, K | Darker blue |
-  | Fixed, Rent | Orange |
-  | Fixed, other bills | Lighter shades of orange, one per bill name |
+  | Fixed: Rent | Orange (strongest) |
+  | Fixed: Utilities, Electricity, Wi-Fi, Misc | Lighter shades of orange, one per bill |
 - **Recent list:** the last 5 entries with the running balance. Tap **x** to delete one.
 - **Offline:** entries saved without signal are kept on the phone and synced later. An hourglass marks unsynced entries.
 - **Security:** a shared key protects writes. The repo contains no sheet ID, key, or data.
@@ -51,7 +54,7 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 
 - **Tab:** set by `TAB_NAME` at the top of `Code.gs` (default `Sirikh`). The tab is created if it does not exist.
 - **Changing the tab:** edit `TAB_NAME`, then deploy a new version.
-- **Existing tabs:** do not point it at a tab you already use for something else. The script rewrites row 1 as its header, fills the Type and Balance columns, and writes a summary in J1:O4.
+- **Existing tabs:** do not point it at a tab you already use for something else. The script rewrites row 1 as its header, fills the Type and Balance columns, and writes its tables from column J onward.
 
 ## Sirikh tab layout
 
@@ -68,18 +71,25 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 - **ID** prevents duplicates and identifies rows to delete. Do not edit it.
 - **Set balance** rows start a new budget. Everything below the most recent one belongs to the current month.
 
-Summary block in **J1:O7**, updated on every save, for the current budget, with a color legend below it in J9:J14:
+### Tables in the sheet (column J onward)
 
-| V | K | Total | | Budget | 705 |
-|---|---|---|---|---|---|
-| 211.43 | 484.41 | 695.84 | | Remaining | 9.16 |
-| **V's Share** | **K's Share** | **Equal Split** | | Since | 2026-10-01 |
-| -136.49 | 136.49 | 347.92 | | Settle up | V owes K $136.49 |
-| | | | | | |
-| **Fixed V** | **Fixed K** | **Fixed Total** | | Fixed settle | K owes V $840.00 |
-| 1800 | 120 | 1920 | | Overall | K owes V $703.51 |
+The script rebuilds these on every save, so the sheet always shows the same numbers as the app:
 
-Do not type in J1:O14; the script overwrites it.
+1. **Who owes whom** (current budget, joint expenses):
+
+   | V paid | K paid | Total |
+   |---|---|---|
+   | 211.43 | 484.41 | 695.84 |
+   | **V's share** | **K's share** | **Equal split** |
+   | -136.49 | 136.49 | 347.92 |
+
+   Followed by "Settle up: V owes K $136.49" and "Including fixed bills: ...".
+2. **Fixed bills:** V paid, K paid, Total, and Settle up for fixed bills.
+3. **Monthly budget:** Budget, Spent, Remaining.
+4. **Colors:** a legend of the row colors.
+5. **History:** one row per budget period, newest first: Since, Budget, Joint spent, V paid, K paid, V's share, K's share, Settle up, Fixed total, Fixed settle, Overall. Past months stay on record here.
+
+Do not type in columns J onward; the script overwrites them.
 
 ## Setup
 

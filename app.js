@@ -2,22 +2,22 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const DEFAULT_CATEGORIES = [
-    'Costco', 'Walmart', 'Harris Teeter', "Trader Joe's", 'Target', 'Shell',
-    'Indian Store', 'Whole Foods', 'Amazon', 'Taco Bell', 'Subway', 'Dollar Tree',
-  ];
-  const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Internet', 'Water', 'Phone bill', 'Insurance'];
+  // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
+  const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Add funds': 'Funds added', 'Set balance': 'Budget set' };
   const TYPE_HINTS = {
-    Joint: 'Comes out of the monthly budget and counts in who owes whom.',
-    Fixed: 'Rent, utilities and other bills. Tracked separately; not taken from the monthly budget.',
-    Personal: 'Logged only. Not in the budget or the split.',
+    Joint: 'Joint: shared day-to-day spending. Comes out of the monthly budget and counts in who owes whom.',
+    Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
+    Personal: 'Personal: only for the person who paid. Not in the budget or who owes whom.',
   };
 
-  // Matches the row colors in the sheet: Personal blue (V light, K darker), Fixed orange (Rent strongest).
+  // Matches the row colors in the sheet: Personal blue (V light, K darker), Fixed orange per bill.
   function colorClass(r) {
     if (r.type === 'Personal') return r.paidBy === 'K' ? 'c-personal-k' : 'c-personal-v';
-    if (r.type === 'Fixed') return /\brent\b/i.test(r.category) ? 'c-rent' : 'c-fixed';
+    if (r.type === 'Fixed') {
+      const name = FIXED_CATEGORIES.find((c) => c.toLowerCase() === String(r.category).trim().toLowerCase());
+      return name ? 'c-fixed-' + name.toLowerCase().replace(/[^a-z]/g, '') : 'c-fixed-misc';
+    }
     return '';
   }
 
@@ -79,30 +79,6 @@
     banner.className = 'banner ' + kind;
     banner.hidden = false;
     if (!sticky) bannerTimer = setTimeout(() => { banner.hidden = true; }, 3500);
-  }
-
-  // ---------- Categories: defaults plus what this phone has typed before, most used first
-  function renderCategories() {
-    const counts = store.get('categories', {});
-    const learned = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
-    const names = new Set(selectedType() === 'Fixed'
-      ? [...FIXED_CATEGORIES, ...learned]
-      : [...learned, ...DEFAULT_CATEGORIES, ...FIXED_CATEGORIES]);
-    const list = $('categoryList');
-    list.innerHTML = '';
-    for (const name of names) {
-      const opt = document.createElement('option');
-      opt.value = name;
-      list.appendChild(opt);
-    }
-  }
-
-  function learnCategory(name) {
-    const counts = store.get('categories', {});
-    const key = Object.keys(counts).find((k) => k.toLowerCase() === name.toLowerCase()) || name;
-    counts[key] = (counts[key] || 0) + 1;
-    store.set('categories', counts);
-    renderCategories();
   }
 
   // ---------- Rendering
@@ -402,13 +378,26 @@
     return checked ? checked.value : 'Joint';
   }
 
+  function selectedFixed() {
+    const checked = document.querySelector('input[name="fixedCat"]:checked');
+    return checked ? checked.value : '';
+  }
+
+  // Shows the description for the selected type, and swaps the Category typing field
+  // for the fixed bill buttons when Fixed is selected.
   function updateTypeHint() {
     const type = selectedType();
     $('typeHint').textContent = TYPE_HINTS[type];
-    $('category').placeholder = type === 'Fixed' ? 'Rent, Utilities, Internet…' : 'Costco, Walmart, Shell…';
-    renderCategories();
+    const fixed = type === 'Fixed';
+    $('category').hidden = fixed;
+    $('fixedPicker').hidden = !fixed;
+    $('categoryLabel').textContent = fixed ? 'Fixed bill' : 'Category';
   }
-  for (const id of ['typeJoint', 'typeFixed', 'typePersonal']) $(id).addEventListener('change', updateTypeHint);
+
+  // Update on both change and click so the description always follows the tapped option.
+  $('typeSeg').addEventListener('change', updateTypeHint);
+  $('typeSeg').addEventListener('click', () => setTimeout(updateTypeHint, 0));
+  $('fixedPicker').addEventListener('change', () => $('fixedPicker').classList.remove('invalid'));
 
   function clearInvalid(form) {
     form.querySelectorAll('.invalid').forEach((el) => el.classList.remove('invalid'));
@@ -426,9 +415,14 @@
   $('expenseForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const date = $('date').value;
-    const category = $('category').value.trim();
+    const type = selectedType();
+    const category = type === 'Fixed' ? selectedFixed() : $('category').value.trim();
     const amount = parseAmount($('amount').value);
     if (!date) return markInvalid($('date'), 'Pick a date.');
+    if (!category && type === 'Fixed') {
+      $('fixedPicker').classList.add('invalid');
+      return showBanner('Pick which fixed bill this is.', 'err');
+    }
     if (!category) return markInvalid($('category'), 'Enter where you spent it.');
     if (amount === null || amount === 0) return markInvalid($('amount'), 'Enter a valid amount.');
 
@@ -439,11 +433,10 @@
       amount,
       paidBy: $('paidBy').value,
       notes: $('notes').value.trim(),
-      type: selectedType(),
+      type,
     };
     enqueue({ op: 'add', entry });
     store.set('paidBy', entry.paidBy);
-    learnCategory(category);
 
     $('expenseForm').reset();
     clearInvalid($('expenseForm'));
@@ -552,11 +545,11 @@
     store.remove('pending');
     store.remove('recent');
   }
+  store.remove('categories');
 
   $('date').value = today();
   $('paidBy').value = store.get('paidBy', 'V');
   updateTypeHint();
-  renderCategories();
   render();
 
   if (!getSettings()) openSettings();

@@ -67,7 +67,6 @@
     <section class="card fixed-card" id="fixedCard" aria-labelledby="fixedLabel" hidden>
       <div class="section-head">
         <h2 id="fixedLabel">Fixed bills</h2>
-        <span class="muted">Rent, utilities</span>
       </div>
       <table class="split">
         <tbody>
@@ -84,10 +83,30 @@
         <input type="date" id="date" required>
       </label>
 
-      <label>Category
-        <input type="text" id="category" list="categoryList" placeholder="Costco, Walmart, Shell…" autocapitalize="words" required>
-        <datalist id="categoryList"></datalist>
-      </label>
+      <fieldset class="seg-field">
+        <legend>Type</legend>
+        <div class="seg" id="typeSeg">
+          <input type="radio" name="type" id="typeJoint" value="Joint" checked>
+          <label for="typeJoint">Joint</label>
+          <input type="radio" name="type" id="typeFixed" value="Fixed">
+          <label for="typeFixed">Fixed</label>
+          <input type="radio" name="type" id="typePersonal" value="Personal">
+          <label for="typePersonal">Personal</label>
+        </div>
+        <div id="typeHint" class="muted hint"></div>
+      </fieldset>
+
+      <div class="field">
+        <span id="categoryLabel" class="field-label">Category</span>
+        <input type="text" id="category" aria-labelledby="categoryLabel" placeholder="Costco, Walmart, Shell…" autocapitalize="words" autocomplete="off" required>
+        <div id="fixedPicker" class="chips" role="radiogroup" aria-labelledby="categoryLabel" hidden>
+          <input type="radio" name="fixedCat" id="fcRent" value="Rent"><label for="fcRent" class="c-fixed-rent">Rent</label>
+          <input type="radio" name="fixedCat" id="fcUtilities" value="Utilities"><label for="fcUtilities" class="c-fixed-utilities">Utilities</label>
+          <input type="radio" name="fixedCat" id="fcElectricity" value="Electricity"><label for="fcElectricity" class="c-fixed-electricity">Electricity</label>
+          <input type="radio" name="fixedCat" id="fcWifi" value="Wi-Fi"><label for="fcWifi" class="c-fixed-wifi">Wi-Fi</label>
+          <input type="radio" name="fixedCat" id="fcMisc" value="Misc"><label for="fcMisc" class="c-fixed-misc">Misc</label>
+        </div>
+      </div>
 
       <label>Amount ($)
         <div class="amount">
@@ -102,19 +121,6 @@
           <option value="K">K</option>
         </select>
       </label>
-
-      <fieldset class="seg-field">
-        <legend>Type</legend>
-        <div class="seg">
-          <input type="radio" name="type" id="typeJoint" value="Joint" checked>
-          <label for="typeJoint">Joint</label>
-          <input type="radio" name="type" id="typeFixed" value="Fixed">
-          <label for="typeFixed">Fixed</label>
-          <input type="radio" name="type" id="typePersonal" value="Personal">
-          <label for="typePersonal">Personal</label>
-        </div>
-        <div id="typeHint" class="muted hint"></div>
-      </fieldset>
 
       <label>Notes
         <input type="text" id="notes" placeholder="Milk, bananas, gas…" autocapitalize="sentences">

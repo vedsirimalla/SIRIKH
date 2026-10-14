@@ -30,6 +30,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -87,19 +88,19 @@ main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
 .overall { font-weight: 600; margin-bottom: 4px; }
 .fixed-card { border-left: 5px solid #fdba74; }
 
-/* Row colors, same as the sheet: Personal blue (V light, K darker), Fixed orange (Rent strongest) */
-.recent li { border-left: 5px solid transparent; padding-left: 8px; }
-.recent li.c-personal-v { border-left-color: #dbeafe; }
-.recent li.c-personal-k { border-left-color: #93c5fd; }
-.recent li.c-rent { border-left-color: #fdba74; }
-.recent li.c-fixed { border-left-color: #fed7aa; }
-.recent li.c-personal-v .tag { background: #dbeafe; color: #1c1917; }
-.recent li.c-personal-k .tag { background: #93c5fd; color: #1c1917; }
-.recent li.c-rent .tag { background: #fdba74; color: #1c1917; }
-.recent li.c-fixed .tag { background: #fed7aa; color: #1c1917; }
+/* Row colors, same as the sheet: Personal blue (V light, K darker), Fixed orange per bill */
+.c-personal-v { --row: #dbeafe; }
+.c-personal-k { --row: #93c5fd; }
+.c-fixed-rent { --row: #fdba74; }
+.c-fixed-utilities { --row: #fed7aa; }
+.c-fixed-electricity { --row: #fcc896; }
+.c-fixed-wifi { --row: #ffe0c2; }
+.c-fixed-misc { --row: #ffedd5; }
+.recent li { border-left: 5px solid var(--row, transparent); padding-left: 8px; }
+.recent li[class*="c-"] .tag { background: var(--row); color: #1c1917; }
 
 /* Form */
-label, legend {
+label, legend, .field-label {
   display: block;
   font-size: 13px;
   font-weight: 600;
@@ -107,6 +108,27 @@ label, legend {
   margin-bottom: 14px;
 }
 legend { margin-bottom: 6px; padding: 0; }
+.field { margin-bottom: 14px; }
+.field-label { margin-bottom: 0; }
+
+/* Fixed bill buttons */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; border-radius: 10px; }
+.chips.invalid { outline: 2px solid var(--err); outline-offset: 3px; }
+.chips input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.chips label {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--field);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chips input:checked + label { background: var(--row); color: #1c1917; border-color: #ea580c; }
+.chips input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 fieldset { border: 0; padding: 0; margin: 0 0 14px; min-width: 0; }
 
 input, select {
