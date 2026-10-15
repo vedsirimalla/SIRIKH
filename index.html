@@ -23,6 +23,7 @@
   <main>
     <div id="banner" class="banner" role="status" hidden></div>
 
+    <div id="mainDash">
     <section class="card balance-card" aria-labelledby="balanceLabel">
       <div id="balanceLabel" class="eyebrow">Monthly budget</div>
       <div class="left-line">
@@ -77,6 +78,55 @@
       <div id="fixedSettle" class="settle"></div>
       <div class="muted">Tracked separately. Not taken from the monthly budget.</div>
     </section>
+    </div>
+
+    <div id="carDash" hidden>
+      <section class="card" aria-labelledby="carTitle">
+        <div id="carTitle" class="eyebrow">Sonata</div>
+        <div class="left-line">
+          <span id="carMpg" class="balance-amount">—</span>
+          <span class="left-word">avg MPG</span>
+        </div>
+        <div class="stats six">
+          <div><span class="stat-label">Price / gal</span><span id="carPpg">—</span></div>
+          <div><span class="stat-label">Fuel $ / mile</span><span id="carFuelCpm">—</span></div>
+          <div><span class="stat-label">Car $ / mile</span><span id="carTotalCpm">—</span></div>
+          <div><span class="stat-label">Miles tracked</span><span id="carMiles">—</span></div>
+          <div><span class="stat-label">Miles / tank</span><span id="carPerTank">—</span></div>
+          <div><span class="stat-label">Eff. range</span><span id="carEff">—</span></div>
+        </div>
+        <div id="carLastFill" class="pace"></div>
+      </section>
+
+      <section class="card" aria-labelledby="carTrendsLabel">
+        <h2 id="carTrendsLabel">Trends</h2>
+        <div id="carCharts"></div>
+      </section>
+
+      <section class="card" aria-labelledby="carSplitLabel">
+        <div class="section-head">
+          <h2 id="carSplitLabel">Who owes whom (car)</h2>
+          <span class="muted">All car costs</span>
+        </div>
+        <table class="split">
+          <tbody>
+            <tr><th scope="col">V paid</th><th scope="col">K paid</th><th scope="col">Total</th></tr>
+            <tr><td id="carPaidV"></td><td id="carPaidK"></td><td id="carPaidTotal"></td></tr>
+            <tr><th scope="col">V's share</th><th scope="col">K's share</th><th scope="col">Equal split</th></tr>
+            <tr><td id="carShareV"></td><td id="carShareK"></td><td id="carEqualSplit"></td></tr>
+            <tr><th scope="col">Owed by V</th><th scope="col">Owed by K</th><th></th></tr>
+            <tr><td id="carOwedV"></td><td id="carOwedK"></td><td></td></tr>
+          </tbody>
+        </table>
+        <div id="carSettle" class="settle"></div>
+        <div class="muted">Separate from the monthly budget and split. Share = what each paid minus half the total.</div>
+      </section>
+
+      <section class="card" aria-labelledby="carCatLabel2">
+        <h2 id="carCatLabel2">Spend by category</h2>
+        <ul id="carCategories" class="cat-list"></ul>
+      </section>
+    </div>
 
     <form id="expenseForm" class="card" autocomplete="off" novalidate>
       <label>Date
@@ -92,11 +142,50 @@
           <label for="typeFixed">Fixed</label>
           <input type="radio" name="type" id="typePersonal" value="Personal">
           <label for="typePersonal">Personal</label>
+          <input type="radio" name="type" id="typeCar" value="Car">
+          <label for="typeCar">Sonata</label>
         </div>
         <div id="typeHint" class="muted hint"></div>
       </fieldset>
 
-      <div class="field">
+      <div id="carFields" hidden>
+        <div class="field">
+          <span id="carCatLabel" class="field-label">Car category</span>
+          <div id="carPicker" class="chips" role="radiogroup" aria-labelledby="carCatLabel">
+            <input type="radio" name="carCat" id="ccFuel" value="Fuel" checked><label for="ccFuel">Fuel</label>
+            <input type="radio" name="carCat" id="ccServicing" value="Servicing"><label for="ccServicing">Servicing</label>
+            <input type="radio" name="carCat" id="ccRepairs" value="Repairs"><label for="ccRepairs">Repairs</label>
+            <input type="radio" name="carCat" id="ccMods" value="Mods"><label for="ccMods">Mods</label>
+            <input type="radio" name="carCat" id="ccInsurance" value="Insurance"><label for="ccInsurance">Insurance</label>
+            <input type="radio" name="carCat" id="ccRegistration" value="Registration/Tax"><label for="ccRegistration">Registration/Tax</label>
+            <input type="radio" name="carCat" id="ccTolls" value="Tolls/Parking"><label for="ccTolls">Tolls/Parking</label>
+            <input type="radio" name="carCat" id="ccWash" value="Car wash"><label for="ccWash">Car wash</label>
+            <input type="radio" name="carCat" id="ccMisc" value="Misc"><label for="ccMisc">Misc</label>
+          </div>
+        </div>
+        <label><span id="vendorLabel">Gas station</span>
+          <input type="text" id="vendor" placeholder="Shell, Costco…" autocapitalize="words" autocomplete="off">
+        </label>
+        <div id="fuelFields">
+          <div class="grid2">
+            <label>Odometer (mi)
+              <input type="text" id="odometer" inputmode="numeric" placeholder="Miles on the dash">
+            </label>
+            <label>Range left (mi)
+              <input type="text" id="rangeLeft" inputmode="numeric" placeholder="Before filling">
+            </label>
+            <label>Gallons
+              <input type="text" id="gallons" inputmode="decimal" placeholder="11.3">
+            </label>
+            <label>Price / gallon
+              <input type="text" id="ppg" inputmode="decimal" placeholder="3.899">
+            </label>
+          </div>
+          <div id="fuelPreview" class="fuel-preview" hidden></div>
+        </div>
+      </div>
+
+      <div class="field" id="categoryField">
         <span id="categoryLabel" class="field-label">Category</span>
         <input type="text" id="category" aria-labelledby="categoryLabel" placeholder="Costco, Walmart, Shell…" autocapitalize="words" autocomplete="off" required>
         <div id="fixedPicker" class="chips" role="radiogroup" aria-labelledby="categoryLabel" hidden>

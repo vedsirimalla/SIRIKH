@@ -4,11 +4,12 @@
   const $ = (id) => document.getElementById(id);
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
-  const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Add funds': 'Funds added', 'Set balance': 'Budget set' };
+  const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set' };
   const TYPE_HINTS = {
     Joint: 'Joint: shared day-to-day spending. Comes out of the monthly budget and counts in who owes whom.',
     Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
     Personal: 'Personal: only for the person who paid. Not in the budget or who owes whom.',
+    Car: 'Sonata: car costs and fuel, saved to the Sonata tab. Has its own split; not in the monthly budget.',
   };
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
@@ -20,9 +21,10 @@
 
   // Older copies of Code.gs save unknown types as Joint, so Fixed bills wait on the phone until
   // the sheet's script is redeployed with at least this version.
-  const REQUIRED_BACKEND = 7;
-  const OUTDATED_MESSAGE = 'Fixed bills are waiting on this phone (hourglass) because the Apps Script in your sheet ' +
-    'is an older version that would save them as Joint. In Apps Script: paste the latest Code.gs, then ' +
+  // Fixed bills need version 7 (older scripts save them as Joint); Sonata entries need version 8.
+  const requiredVersion = (op) => (op.table === 'car' ? 8 : op.op === 'add' && op.entry.type === 'Fixed' ? 7 : 0);
+  const OUTDATED_MESSAGE = 'Some entries are waiting on this phone (hourglass) because the Apps Script in your sheet ' +
+    'is an older version. In Apps Script: paste the latest Code.gs, then ' +
     'Deploy > Manage deployments > pencil > Version: New version > Deploy. They will send automatically.';
 
   // ---------- Storage (this phone only)
@@ -129,7 +131,7 @@
         balance = op.entry.amount;
         hasBalance = true;
         Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0 });
-      } else if (op.op === 'add') {
+      } else if (op.op === 'add' && op.table !== 'car') {
         apply(op.entry, 1);
       } else {
         const e = recent.find((r) => r.id === op.id);
@@ -224,12 +226,16 @@
     return 'V and K are even';
   }
 
+  const isCarMode = () => selectedType() === 'Car';
+
   function renderRecent() {
     const state = getState();
-    const queue = getQueue();
+    const isCar = isCarMode();
+    const queue = getQueue().filter((op) => (op.table === 'car') === isCar);
     const deleting = new Set(queue.filter((op) => op.op === 'delete').map((op) => op.id));
     const pending = queue.filter((op) => op.op === 'add').map((op) => ({ ...op.entry, pending: true })).reverse();
-    const saved = (state ? state.recent || [] : []).filter((r) => !deleting.has(r.id));
+    const source = state ? (isCar ? (state.car && state.car.recent) || [] : state.recent || []) : [];
+    const saved = source.filter((r) => !deleting.has(r.id));
     const rows = [...pending, ...saved];
 
     const list = $('recentList');
@@ -242,14 +248,14 @@
     }
     for (const r of rows) {
       const li = document.createElement('li');
-      li.className = [colorClass(r), r.pending ? 'pending' : ''].filter(Boolean).join(' ');
+      li.className = [isCar ? 'c-car' : colorClass(r), r.pending ? 'pending' : ''].filter(Boolean).join(' ');
 
       const body = document.createElement('div');
       body.className = 'body';
       const top = document.createElement('div');
       top.className = 'top';
       const name = document.createElement('span');
-      name.textContent = r.category;
+      name.textContent = isCar ? r.vendor || r.category : r.category;
       const amt = document.createElement('span');
       amt.textContent = (r.type === 'Add funds' ? '+' : '') + money(r.amount);
       top.append(name, amt);
@@ -258,9 +264,15 @@
       sub.className = 'sub';
       const tag = document.createElement('span');
       tag.className = 'tag';
-      tag.textContent = TYPE_LABELS[r.type] || r.type || 'Joint';
-      const parts = [prettyDate(r.date), r.paidBy ? 'by ' + r.paidBy : '', r.notes];
-      if (r.balance !== undefined && r.balance !== '') parts.push('Bal ' + money(r.balance));
+      tag.textContent = isCar ? r.category : TYPE_LABELS[r.type] || r.type || 'Joint';
+      const parts = [prettyDate(r.date), r.paidBy ? 'by ' + r.paidBy : ''];
+      if (isCar && r.category === 'Fuel') {
+        if (r.miles !== undefined && r.miles !== '') parts.push(`${num(r.miles)} mi`);
+        if (r.mpg !== undefined && r.mpg !== '') parts.push(`${Number(r.mpg).toFixed(1)} MPG`);
+        if (r.gallons !== undefined && r.gallons !== '') parts.push(`${r.gallons} gal`);
+      }
+      parts.push(r.notes);
+      if (!isCar && r.balance !== undefined && r.balance !== '') parts.push('Bal ' + money(r.balance));
       sub.append(tag, document.createTextNode(parts.filter(Boolean).join(' · ')));
       body.append(top, sub);
       li.appendChild(body);
@@ -271,19 +283,197 @@
         del.className = 'del';
         del.setAttribute('aria-label', `Delete ${r.category}`);
         del.textContent = '×';
-        del.addEventListener('click', () => removeEntry(r));
+        del.addEventListener('click', () => removeEntry(r, isCar));
         li.appendChild(del);
       }
       list.appendChild(li);
     }
 
-    const n = queue.length;
+    const n = getQueue().length;
     $('syncNote').textContent = n ? `${n} waiting to sync` : '';
   }
 
   function render() {
+    const isCar = isCarMode();
+    $('mainDash').hidden = isCar;
+    $('carDash').hidden = !isCar;
     renderBalance();
+    if (isCar) renderCar();
     renderRecent();
+  }
+
+  // ---------- Sonata (car)
+  const num = (n, digits = 0) => Number(n).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const per = (n) => '$' + Number(n).toFixed(3);
+
+  // Highest odometer known, including fill-ups still waiting to sync.
+  function lastOdometer() {
+    const st = getState();
+    let odo = st && st.car ? Number(st.car.lastOdometer) || 0 : 0;
+    for (const op of getQueue()) {
+      if (op.table === 'car' && op.op === 'add' && op.entry.category === 'Fuel' && op.entry.odometer !== '') {
+        odo = Math.max(odo, Number(op.entry.odometer));
+      }
+    }
+    return odo;
+  }
+
+  function renderCar() {
+    const st = getState();
+    const c = (st && st.car) || null;
+    const dash = (v, f) => (c && v ? f(v) : '—');
+    $('carMpg').textContent = dash(c && c.mpg, (v) => Number(v).toFixed(1));
+    $('carPpg').textContent = dash(c && c.avgPpg, per);
+    $('carFuelCpm').textContent = dash(c && c.fuelCpm, per);
+    $('carTotalCpm').textContent = dash(c && c.totalCpm, per);
+    $('carMiles').textContent = dash(c && c.milesTracked, (v) => num(v));
+    $('carPerTank').textContent = dash(c && c.avgMilesPerTank, (v) => num(v));
+    $('carEff').textContent = dash(c && c.avgEffRange, (v) => num(v));
+    const lf = c && c.lastFill;
+    $('carLastFill').textContent = lf
+      ? `Last fill-up ${prettyDate(lf.date)} at ${num(lf.odometer)} mi` +
+        (lf.miles !== '' ? `: ${num(lf.miles)} mi, ` : '') +
+        (lf.mpg !== '' ? `${Number(lf.mpg).toFixed(1)} MPG` : '') +
+        (lf.eff !== '' ? `, effective range ${num(lf.eff)} mi` : '') +
+        (c.fills ? `. ${c.fills} fill-ups, ${money(c.fuelSpend)} on fuel.` : '')
+      : 'No fill-ups yet. Pick Fuel below to log one.';
+
+    // Split: what the sheet reported plus car entries not synced yet.
+    let v = c ? c.v : 0;
+    let k = c ? c.k : 0;
+    for (const op of getQueue()) {
+      if (op.table !== 'car' || op.op !== 'add') continue;
+      if (op.entry.paidBy === 'V') v += op.entry.amount;
+      if (op.entry.paidBy === 'K') k += op.entry.amount;
+    }
+    v = round2(v);
+    k = round2(k);
+    const total = round2(v + k);
+    const split = round2(total / 2);
+    const vShare = round2(v - split);
+    const kShare = round2(k - split);
+    $('carPaidV').textContent = money(v);
+    $('carPaidK').textContent = money(k);
+    $('carPaidTotal').textContent = money(total);
+    $('carEqualSplit').textContent = money(split);
+    for (const [id, n] of [['carShareV', vShare], ['carShareK', kShare]]) {
+      $(id).textContent = signed(n);
+      $(id).className = n >= 0.01 ? 'pos' : n <= -0.01 ? 'neg' : '';
+    }
+    $('carOwedV').textContent = money(vShare < 0 ? -vShare : 0);
+    $('carOwedK').textContent = money(kShare < 0 ? -kShare : 0);
+    $('carSettle').textContent = settleText(vShare, kShare);
+
+    const cats = $('carCategories');
+    cats.innerHTML = '';
+    const byCat = (c && c.byCategory) || {};
+    const names = Object.keys(byCat).filter((n) => byCat[n]).sort((a, b) => byCat[b] - byCat[a]);
+    if (!names.length) {
+      const li = document.createElement('li');
+      li.className = 'muted';
+      li.textContent = 'Nothing yet.';
+      cats.appendChild(li);
+    }
+    for (const n of names) {
+      const li = document.createElement('li');
+      const a = document.createElement('span');
+      a.textContent = n;
+      const b = document.createElement('span');
+      b.textContent = money(byCat[n]);
+      li.append(a, b);
+      cats.appendChild(li);
+    }
+
+    const charts = $('carCharts');
+    charts.innerHTML = '';
+    const series = (c && c.series) || [];
+    const monthly = (c && c.monthly) || [];
+    if (series.length < 2 && monthly.length < 1) {
+      charts.textContent = 'Charts appear after two fill-ups with odometer and gallons.';
+      charts.className = 'muted';
+      return;
+    }
+    charts.className = 'charts';
+    if (series.length >= 2) {
+      charts.appendChild(lineChart('MPG per fill-up', series.map((p) => ({ x: p.date, y: p.mpg })), (y) => y.toFixed(1)));
+      charts.appendChild(lineChart('Price per gallon', series.filter((p) => p.ppg).map((p) => ({ x: p.date, y: p.ppg })), (y) => '$' + y.toFixed(2)));
+      charts.appendChild(lineChart('Fuel cost per mile', series.filter((p) => p.cpm).map((p) => ({ x: p.date, y: p.cpm })), (y) => '$' + y.toFixed(3)));
+    }
+    if (monthly.length) {
+      charts.appendChild(barChart('Car spend per month', monthly.map((m) => ({ x: m.month, y: m.total }))));
+    }
+  }
+
+  // Small dependency-free SVG charts.
+  const SVG = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs, text) {
+    const el = document.createElementNS(SVG, tag);
+    for (const k of Object.keys(attrs || {})) el.setAttribute(k, attrs[k]);
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  function chartFrame(title) {
+    const fig = document.createElement('figure');
+    fig.className = 'chart';
+    const cap = document.createElement('figcaption');
+    cap.textContent = title;
+    fig.appendChild(cap);
+    const svg = svgEl('svg', { viewBox: '0 0 320 130', role: 'img', 'aria-label': title });
+    fig.appendChild(svg);
+    return { fig, svg };
+  }
+
+  const shortDate = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? prettyDate(iso) : iso);
+  const shortMonth = (ym) => {
+    const m = /^(\d{4})-(\d{2})$/.exec(ym || '');
+    return m ? new Date(+m[1], m[2] - 1, 1).toLocaleDateString('en-US', { month: 'short' }) : ym;
+  };
+
+  function lineChart(title, points, fmt) {
+    const { fig, svg } = chartFrame(title);
+    if (points.length < 2) return fig;
+    const L = 40, R = 312, T = 10, B = 104;
+    const ys = points.map((p) => p.y);
+    let min = Math.min(...ys), max = Math.max(...ys);
+    if (min === max) { min -= 1; max += 1; }
+    const pad = (max - min) * 0.1;
+    min -= pad; max += pad;
+    const x = (i) => L + (i * (R - L)) / (points.length - 1);
+    const y = (v) => B - ((v - min) / (max - min)) * (B - T);
+    [max - pad, min + pad].forEach((v) => {
+      svg.appendChild(svgEl('line', { x1: L, x2: R, y1: y(v), y2: y(v), class: 'grid' }));
+      svg.appendChild(svgEl('text', { x: L - 4, y: y(v) + 4, 'text-anchor': 'end', class: 'axis' }, fmt(v)));
+    });
+    svg.appendChild(svgEl('polyline', { points: points.map((p, i) => `${x(i)},${y(p.y)}`).join(' '), class: 'line' }));
+    points.forEach((p, i) => {
+      const dot = svgEl('circle', { cx: x(i), cy: y(p.y), r: 3, class: 'dot' });
+      dot.appendChild(svgEl('title', {}, `${shortDate(p.x)}: ${fmt(p.y)}`));
+      svg.appendChild(dot);
+    });
+    svg.appendChild(svgEl('text', { x: L, y: 124, class: 'axis' }, shortDate(points[0].x)));
+    svg.appendChild(svgEl('text', { x: R, y: 124, 'text-anchor': 'end', class: 'axis' }, shortDate(points[points.length - 1].x)));
+    const last = points[points.length - 1];
+    svg.appendChild(svgEl('text', { x: x(points.length - 1) - 6, y: y(last.y) - 8, 'text-anchor': 'end', class: 'value' }, fmt(last.y)));
+    return fig;
+  }
+
+  function barChart(title, points) {
+    const { fig, svg } = chartFrame(title);
+    const L = 8, R = 312, T = 18, B = 104;
+    const max = Math.max(...points.map((p) => p.y), 1);
+    const slot = (R - L) / points.length;
+    const w = Math.min(36, slot * 0.7);
+    points.forEach((p, i) => {
+      const h = (p.y / max) * (B - T);
+      const cx = L + slot * i + slot / 2;
+      const bar = svgEl('rect', { x: cx - w / 2, y: B - h, width: w, height: Math.max(h, 1), rx: 3, class: 'bar' });
+      bar.appendChild(svgEl('title', {}, `${shortMonth(p.x)}: ${money(p.y)}`));
+      svg.appendChild(bar);
+      svg.appendChild(svgEl('text', { x: cx, y: B - h - 4, 'text-anchor': 'middle', class: 'value' }, '$' + Math.round(p.y)));
+      svg.appendChild(svgEl('text', { x: cx, y: 122, 'text-anchor': 'middle', class: 'axis' }, shortMonth(p.x)));
+    });
+    return fig;
   }
 
   // ---------- Talking to the Apps Script web app (text/plain avoids a CORS preflight)
@@ -324,15 +514,15 @@
       period: data.period,
       recent: data.recent || [],
       version: data.version || 0,
+      car: data.car || null,
     });
     store.set('syncedAt', Date.now());
   }
 
-  function backendOutdated() {
+  const heldBack = (op) => {
     const st = getState();
-    return !!st && st.version < REQUIRED_BACKEND;
-  }
-  const heldBack = (op) => op.op === 'add' && op.entry.type === 'Fixed' && backendOutdated();
+    return !!st && st.version < requiredVersion(op);
+  };
   const nextOp = () => getQueue().find((op) => !heldBack(op));
 
   // Sends queued changes in order, then refreshes.
@@ -353,7 +543,9 @@
       let sent = false;
       for (let op = nextOp(); op; op = nextOp()) {
         try {
-          const data = await call(op.op === 'add' ? { action: 'add', entry: op.entry } : { action: 'delete', id: op.id });
+          const data = await call(op.op === 'add'
+            ? { action: 'add', table: op.table, entry: op.entry }
+            : { action: 'delete', table: op.table, id: op.id });
           saveState(data);
           sent = true;
         } catch (err) {
@@ -410,10 +602,61 @@
     const type = selectedType();
     $('typeHint').textContent = TYPE_HINTS[type];
     const fixed = type === 'Fixed';
+    const car = type === 'Car';
     $('category').hidden = fixed;
     $('fixedPicker').hidden = !fixed;
+    $('categoryField').hidden = car;
+    $('carFields').hidden = !car;
     $('categoryLabel').textContent = fixed ? 'Fixed bill' : 'Category';
+    $('saveBtn').textContent = car ? 'Save car expense' : 'Save expense';
+    updateCarFields();
+    if (car !== !$('carDash').hidden) render();
   }
+
+  function selectedCarCat() {
+    const checked = document.querySelector('input[name="carCat"]:checked');
+    return checked ? checked.value : 'Fuel';
+  }
+
+  // Fuel shows odometer, range, gallons and price; other car categories just need a vendor and amount.
+  let amountTyped = false;
+  function updateCarFields() {
+    const fuel = selectedCarCat() === 'Fuel';
+    $('fuelFields').hidden = !fuel;
+    $('vendorLabel').textContent = fuel ? 'Gas station' : 'Vendor or description';
+    $('vendor').placeholder = fuel ? 'Shell, Costco…' : 'Hyundai dealer, oil change…';
+    updateFuelPreview();
+  }
+
+  // Live preview of what this fill-up will calculate, from the last odometer reading.
+  function updateFuelPreview() {
+    const preview = $('fuelPreview');
+    if (!isCarMode() || selectedCarCat() !== 'Fuel') { preview.hidden = true; return; }
+    const gal = parseAmount($('gallons').value);
+    const price = parseAmount($('ppg').value);
+    if (!amountTyped && gal && price) $('amount').value = (Math.round(gal * price * 100) / 100).toFixed(2);
+    const odo = parseAmount($('odometer').value);
+    const range = parseAmount($('rangeLeft').value);
+    const last = lastOdometer();
+    const parts = [];
+    if (odo && last && odo > last) {
+      const miles = round2(odo - last);
+      parts.push(`${num(miles)} mi since last fill-up`);
+      if (gal) parts.push(`${(miles / gal).toFixed(1)} MPG`);
+      if (range !== null) parts.push(`effective range ${num(miles + range)} mi`);
+      const amt = parseAmount($('amount').value);
+      if (amt) parts.push(`${per(amt / miles)}/mi`);
+    } else if (odo && last && odo <= last) {
+      parts.push(`Odometer should be above the last fill-up (${num(last)} mi).`);
+    } else if (last) {
+      parts.push(`Last fill-up odometer: ${num(last)} mi.`);
+    }
+    preview.textContent = parts.join(' · ');
+    preview.hidden = !parts.length;
+  }
+  $('carPicker').addEventListener('change', updateCarFields);
+  for (const id of ['odometer', 'rangeLeft', 'gallons', 'ppg']) $(id).addEventListener('input', updateFuelPreview);
+  $('amount').addEventListener('input', () => { amountTyped = $('amount').value.trim() !== ''; updateFuelPreview(); });
 
   // Update on both change and click so the description always follows the tapped option.
   $('typeSeg').addEventListener('change', updateTypeHint);
@@ -429,14 +672,62 @@
     input.focus();
     showBanner(message, 'err');
   }
-  for (const id of ['date', 'category', 'amount', 'fundsAmount', 'fundsDate', 'scriptUrl', 'secretKey']) {
+  for (const id of ['date', 'category', 'amount', 'odometer', 'fundsAmount', 'fundsDate', 'scriptUrl', 'secretKey']) {
     $(id).addEventListener('input', () => $(id).classList.remove('invalid'));
+  }
+
+  async function saveCar(date) {
+    const category = selectedCarCat();
+    const fuel = category === 'Fuel';
+    const optNum = (id) => {
+      const v = $(id).value.trim();
+      return v === '' ? '' : parseAmount(v);
+    };
+    const odometer = fuel ? optNum('odometer') : '';
+    const rangeLeft = fuel ? optNum('rangeLeft') : '';
+    const gallons = fuel ? optNum('gallons') : '';
+    const ppg = fuel ? optNum('ppg') : '';
+    for (const [id, v, label] of [['odometer', odometer, 'odometer'], ['rangeLeft', rangeLeft, 'range left'], ['gallons', gallons, 'gallons'], ['ppg', ppg, 'price per gallon']]) {
+      if (v === null || (v !== '' && v < 0)) return markInvalid($(id), `Enter a valid ${label}.`);
+    }
+    const last = lastOdometer();
+    if (fuel && odometer !== '' && last && odometer <= last) {
+      return markInvalid($('odometer'), `Odometer should be above the last fill-up (${num(last)} mi).`);
+    }
+    let amount = parseAmount($('amount').value);
+    if ((amount === null || amount === 0) && gallons && ppg) amount = round2(gallons * ppg);
+    if (amount === null || amount === 0) return markInvalid($('amount'), 'Enter the amount.');
+    const miles = fuel && odometer !== '' && last ? round2(odometer - last) : 0;
+    const entry = {
+      id: uuid(), date, category, vendor: $('vendor').value.trim(), amount, paidBy: $('paidBy').value,
+      notes: $('notes').value.trim(), odometer, rangeLeft, gallons, pricePerGallon: ppg,
+    };
+    enqueue({ op: 'add', table: 'car', entry });
+    store.set('paidBy', entry.paidBy);
+
+    $('expenseForm').reset();
+    clearInvalid($('expenseForm'));
+    amountTyped = false;
+    $('date').value = today();
+    $('paidBy').value = entry.paidBy;
+    $('typeCar').checked = true; // stay on Sonata for the next entry
+    updateTypeHint();
+
+    $('saveBtn').disabled = true;
+    const status = await sync();
+    $('saveBtn').disabled = false;
+    report(status, `Saved ✓ ${category} ${money(amount)}` +
+      (miles > 0 && gallons ? ` · ${(miles / gallons).toFixed(1)} MPG` : ''));
   }
 
   $('expenseForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const date = $('date').value;
     const type = selectedType();
+    if (type === 'Car') {
+      if (!date) return markInvalid($('date'), 'Pick a date.');
+      return saveCar(date);
+    }
     const category = type === 'Fixed' ? selectedFixed() : $('category').value.trim();
     const amount = parseAmount($('amount').value);
     if (!date) return markInvalid($('date'), 'Pick a date.');
@@ -461,6 +752,7 @@
 
     $('expenseForm').reset();
     clearInvalid($('expenseForm'));
+    amountTyped = false;
     $('date').value = today();
     $('paidBy').value = entry.paidBy;
     updateTypeHint();
@@ -477,8 +769,9 @@
   });
 
   // ---------- Delete from Recent
-  async function removeEntry(item) {
-    if (!confirm(`Delete "${item.category}" ${money(item.amount)} from ${prettyDate(item.date)}?`)) return;
+  async function removeEntry(item, isCar) {
+    const name = isCar ? item.vendor || item.category : item.category;
+    if (!confirm(`Delete "${name}" ${money(item.amount)} from ${prettyDate(item.date)}?`)) return;
     const queue = getQueue();
     const queued = queue.find((op) => op.op === 'add' && op.entry.id === item.id);
     if (queued) {
@@ -488,7 +781,7 @@
       showBanner('Removed.', 'ok');
       return;
     }
-    enqueue({ op: 'delete', id: item.id });
+    enqueue(isCar ? { op: 'delete', table: 'car', id: item.id } : { op: 'delete', id: item.id });
     const status = await sync();
     if (status === 'ok') showBanner('Deleted ✓', 'ok');
     if (status === 'offline') showBanner('Will delete when you are back online.', 'warn');

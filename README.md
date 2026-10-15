@@ -6,7 +6,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 
 ## Features
 
-- **Entry form:** Date (calendar, defaults to today), Type (Joint, Fixed or Personal), Category, Amount, Paid By (V or K), Notes.
+- **Entry form:** Date (calendar, defaults to today), Type (Joint, Fixed, Personal or Sonata), Category, Amount, Paid By (V or K), Notes.
   - **Joint and Personal:** Category is a plain typing field (no dropdown).
   - **Fixed:** Category is replaced by buttons for exactly five bills: Rent, Utilities, Electricity, Wi-Fi, Misc.
   - The text under Type explains the selected type.
@@ -21,6 +21,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - V's share and K's share (what each paid minus half the total), and the Equal split.
   - A plain line such as "V owes K $140.50", plus an overall line that includes fixed bills.
 - **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total, and who owes whom for fixed bills.
+- **Sonata (car):** the fourth Type option. Car costs and fuel go to their own **Sonata** tab, with their own split. See "Sonata tab" below.
 - **Color coding** (in the app and the sheet):
 
   | Type | Color |
@@ -91,6 +92,36 @@ The script rebuilds these on every save, so the sheet always shows the same numb
 
 Do not type in columns J onward; the script overwrites them.
 
+## Sonata tab
+
+Pick **Sonata** under Type. The form switches to car fields and the dashboard shows car stats, charts and the car split. Nothing here touches the monthly budget or the Sirikh tab.
+
+- **Categories (buttons):** Fuel, Servicing, Repairs, Mods, Insurance, Registration/Tax, Tolls/Parking, Car wash, Misc.
+- **Fuel entry:** gas station, odometer, range left, gallons, price per gallon. Amount fills in from gallons x price. A live preview shows miles, MPG and effective range before you save. An odometer lower than the last fill-up is rejected.
+- **Other categories:** vendor or description and amount.
+
+Columns: Date | Category | Station / Vendor | Amount ($) | Paid By | Odometer | Miles Driven | Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID (hidden)
+
+Calculated by the script for Fuel rows, in odometer order:
+
+| Column | Formula |
+|---|---|
+| Miles Driven | this odometer minus the previous fill-up's odometer |
+| Effective Range | Miles Driven + Range Left |
+| MPG | Miles Driven / Gallons of this fill-up |
+| Cost/Mile | Amount / Miles Driven |
+
+A fill-up covering more than 1.6x a typical tank (a fill-up was missed in between) keeps its miles but is left out of MPG, Cost/Mile and Effective Range.
+
+Columns Q onward (rebuilt on every save):
+
+1. **Who owes whom (car):** V paid, K paid, Total; V's share, K's share, Equal split; Owed by V, Owed by K; Settle up.
+2. **Fuel stats:** average, best and worst MPG; average price per gallon; fuel and total cost per mile; average miles per tank; average effective range; fill-ups; gallons; fuel spend; miles tracked; last odometer.
+3. **Spend by category** and total car spend.
+4. **Monthly table and fuel log** (from row 40), which feed four charts: MPG per fill-up, price per gallon, fuel cost per mile, and car spend per month.
+
+The first time the app loads with an empty Sonata tab (yours, or one it creates), the 15 fill-ups from the closed HyundaiSonata2026 tab are copied in once. HyundaiSonata2026 is only read, never edited. All new car entries go to the Sonata tab.
+
 ## Setup
 
 ### 1. Backend (once)
@@ -157,7 +188,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed bills stay on the phone with an hourglass, or show as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 7" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 8" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

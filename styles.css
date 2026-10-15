@@ -73,6 +73,7 @@ main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
 .meter-fill.warn { background: var(--warn); }
 .meter-fill.over { background: var(--err); }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.stats.six { row-gap: 12px; }
 .stats > div { display: grid; gap: 2px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .stat-label { font-size: 12px; font-weight: 600; color: var(--muted); }
 .pace { margin-top: 10px; font-size: 14px; color: var(--muted); }
@@ -95,6 +96,33 @@ main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
 .c-fixed-k { --row: #fb923c; }
 .recent li { border-left: 5px solid var(--row, transparent); padding-left: 8px; }
 .recent li[class*="c-"] .tag { background: var(--row); color: #1c1917; }
+.c-car { --row: #c7d2fe; }
+
+/* Sonata2026 */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px; }
+.fuel-preview {
+  margin: -4px 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--field);
+  border: 1px dashed var(--border);
+  font-size: 14px;
+  font-weight: 600;
+}
+.charts { display: grid; gap: 14px; margin-top: 8px; }
+.chart { margin: 0; }
+.chart figcaption { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart .axis { fill: var(--muted); font-size: 10px; }
+.chart .value { fill: var(--text); font-size: 11px; font-weight: 700; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.chart .dot { fill: var(--card); stroke: var(--accent); stroke-width: 2; }
+.chart .bar { fill: var(--accent); }
+.cat-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.cat-list li { display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.cat-list li:first-child { border-top: none; }
+.cat-list li span:last-child { font-weight: 700; }
 
 /* Form */
 label, legend, .field-label {
@@ -163,7 +191,7 @@ input.invalid { border-color: var(--err); }
 /* Joint / Personal switch */
 .seg {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   background: var(--field);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -175,7 +203,7 @@ input.invalid { border-color: var(--err); }
   text-align: center;
   padding: 10px 0;
   border-radius: 8px;
-  font-size: 16px;
+  font-size: 15px;
   color: var(--text);
   cursor: pointer;
 }
