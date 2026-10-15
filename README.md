@@ -8,7 +8,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 
 - **Entry form:** Date (calendar, defaults to today), Type (Joint, Fixed, Personal or Sonata), Category, Amount, Expense for, Card used, Notes.
   - **Card used:** whose card paid (V's card or K's card).
-  - **Expense for:** whose expense it is. Asked only for Personal (V or K). Joint and Fixed are always shared; Sonata has no split.
+  - **Expense for:** whose expense it is. Personal: V or K. Sonata: V or K (whose turn) or Joint. Joint and Fixed are always shared.
   - **Owed in full:** a one-person expense on the other person's card is owed back in full. Example: K orders ramen for herself and it goes on V's card, so K owes V the whole amount. The app shows this before you save.
   - **Joint and Personal:** Category is a plain typing field (no dropdown).
   - **Fixed:** Category is replaced by buttons for exactly five bills: Rent, Utilities, Electricity, Wi-Fi, Misc.
@@ -28,7 +28,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - V's share and K's share (what each paid minus half the total), and the Equal split.
   - A plain line such as "V owes K $140.50", plus an overall line that includes fixed bills.
 - **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total, and who owes whom for fixed bills.
-- **Sonata (car):** the fourth Type option. Car costs and fuel go to their own **Sonata** tab. No split: V and K take turns paying, so it just shows what each has paid and the total. See "Sonata tab" below.
+- **Sonata (car):** the fourth Type option. Car costs and fuel go to their own **Sonata** tab. V and K take turns paying (V three tanks, K the fourth), so own turns owe nothing; Joint costs split 50/50. See "Sonata tab" below.
 - **Color coding** (in the app and the sheet):
 
   | Type | Color |
@@ -109,7 +109,7 @@ Pick **Sonata** under Type. The form switches to car fields and the dashboard sh
 - **Fuel entry:** gas station, odometer, range left, gallons, price per gallon. Amount fills in from gallons x price. A live preview shows miles, MPG and effective range before you save. An odometer lower than the last fill-up is rejected.
 - **Other categories:** vendor or description and amount.
 
-Columns: Date | Category | Station / Vendor | Amount ($) | Card Used | Odometer | Miles Driven | Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID (hidden)
+Columns: Date | Category | Station / Vendor | Amount ($) | Card Used | Odometer | Miles Driven | Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID (hidden) | Expense For
 
 Calculated by the script for Fuel rows, in odometer order:
 
@@ -124,7 +124,11 @@ A fill-up covering more than 1.6x a typical tank (a fill-up was missed in betwee
 
 Columns Q onward (rebuilt on every save):
 
-1. **Spent so far:** V paid, K paid, Total spent (all car costs, by whose card paid). No split or owed amounts.
+1. **Spent so far:** V paid, K paid, Total spent (all car costs, by whose card paid), then "Owed from joint or other-card costs":
+   - Own turn (Expense For matches the card, or blank): nothing owed.
+   - Joint (for example a trip fill-up): split 50/50, the other person owes half to the card owner.
+   - A turn paid on the other person's card: owed in full.
+   Fuel stats also show fill-ups by turn (V, K, Joint).
 2. **Fuel stats:** average, best and worst MPG; average price per gallon; fuel and total cost per mile; average miles per tank; average effective range; fill-ups; gallons; fuel spend; miles tracked; last odometer.
 3. **Spend by category** and total car spend.
 4. **Monthly table and fuel log** (from row 40), which feed four charts: MPG per fill-up, price per gallon, fuel cost per mile, and car spend per month.
@@ -197,7 +201,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 11" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 12" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

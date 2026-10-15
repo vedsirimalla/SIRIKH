@@ -38,7 +38,7 @@
 
 const TAB_NAME = 'Sirikh';
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 11;
+const BACKEND_VERSION = 12;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Balance ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget'];
@@ -495,10 +495,12 @@ function formatDate_(v, tz) {
 // Sonata: car expenses and fuel tracking, kept in its own tab and table.
 //
 //   Date | Category | Station / Vendor | Amount ($) | Card Used | Odometer | Miles Driven |
-//   Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID
+//   Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID | Expense For
 //
-// No split here: V and K take turns paying (V three tanks, K the fourth), so the tab just tracks
-// how much each has paid and the total spent so far.
+// Expense For says whose turn or cost it is: V, K or Joint (blank = the card owner's own turn).
+// V and K take turns (V three tanks, K the fourth), so their own turns create nothing owed.
+//   Joint (a trip fill-up, a shared repair): split 50/50, the other person owes half to the card owner.
+//   A turn paid on the other person's card: owed back in full.
 //
 // Calculated by this script for Fuel rows (ordered by odometer):
 //   Miles Driven    = this odometer - previous fill-up's odometer
@@ -513,9 +515,9 @@ function formatDate_(v, tz) {
 
 const CAR_TAB = 'Sonata';
 const CAR_HEADERS = ['Date', 'Category', 'Station / Vendor', 'Amount ($)', 'Card Used', 'Odometer', 'Miles Driven',
-  'Range Left', 'Effective Range', 'Gallons', 'Price/Gal', 'MPG', 'Cost/Mile', 'Notes', 'ID'];
+  'Range Left', 'Effective Range', 'Gallons', 'Price/Gal', 'MPG', 'Cost/Mile', 'Notes', 'ID', 'Expense For'];
 const K = { DATE: 0, CATEGORY: 1, VENDOR: 2, AMOUNT: 3, PAID_BY: 4, ODO: 5, MILES: 6, RANGE: 7, EFF: 8,
-  GAL: 9, PPG: 10, MPG: 11, CPM: 12, NOTES: 13, ID: 14 };
+  GAL: 9, PPG: 10, MPG: 11, CPM: 12, NOTES: 13, ID: 14, FOR: 15 };
 const CAR_CATEGORIES = ['Fuel', 'Servicing', 'Repairs', 'Mods', 'Insurance', 'Registration/Tax',
   'Tolls/Parking', 'Car wash', 'Misc'];
 const CAR_SUMMARY_COL = 17; // column Q
@@ -533,10 +535,6 @@ function getCarSheet_() {
     header.setValues([CAR_HEADERS]).setFontWeight('bold').setBackground('#f3f4f6');
     sheet.setFrozenRows(1);
     sheet.hideColumns(K.ID + 1);
-  }
-  const extra = sheet.getRange(1, CAR_HEADERS.length + 1);
-  if (extra.getValues()[0][0] === 'Expense For') {
-    sheet.getRange(1, CAR_HEADERS.length + 1, Math.max(sheet.getLastRow(), 1), 1).clearContent().clearFormat();
   }
   const props = PropertiesService.getScriptProperties();
   if (isEmpty && !props.getProperty('SONATA_IMPORTED')) {
@@ -574,7 +572,7 @@ function importOldFuelLog_(sheet) {
     if (date === '' || amount === '' || toNumber_(amount) === 0) return;
     const paidBy = String(cells[3]).trim().toUpperCase();
     rows.push([date, 'Fuel', String(cells[1]).trim(), toNumber_(amount), paidBy === 'K' ? 'K' : paidBy === 'V' ? 'V' : '',
-      num(cells[4]), '', num(cells[6]), '', num(cells[8]), num(cells[9]), '', '', String(cells[10]).trim(), Utilities.getUuid()]);
+      num(cells[4]), '', num(cells[6]), '', num(cells[8]), num(cells[9]), '', '', String(cells[10]).trim(), Utilities.getUuid(), '']);
   });
   if (rows.length) sheet.getRange(2, 1, rows.length, CAR_HEADERS.length).setValues(rows);
 }
@@ -586,6 +584,8 @@ function validateCar_(b) {
   if (!category) throw new Error('Pick a car category.');
   const paidBy = String(b.paidBy || '');
   if (paidBy !== 'V' && paidBy !== 'K') throw new Error('Card used must be V or K.');
+  const expenseFor = b.expenseFor === undefined || b.expenseFor === '' ? paidBy : String(b.expenseFor);
+  if (['V', 'K', 'Joint'].indexOf(expenseFor) === -1) throw new Error('Expense for must be V, K or Joint.');
   const opt = (v, name) => {
     if (v === '' || v === null || v === undefined) return '';
     const n = Number(v);
@@ -609,6 +609,7 @@ function validateCar_(b) {
     gallons: category === 'Fuel' ? gallons : '',
     pricePerGallon: category === 'Fuel' ? ppg : '',
     notes: safeText_(String(b.notes || '').trim().slice(0, 500)),
+    expenseFor: expenseFor,
   };
 }
 
@@ -632,7 +633,7 @@ function addCar_(sheet, e) {
   let row = 2;
   for (let i = rows.length - 1; i >= 0; i--) if (!isEmptyCarRow_(rows[i])) { row = i + 3; break; }
   sheet.getRange(row, 1, 1, CAR_HEADERS.length).setValues([[e.date, e.category, e.vendor, e.amount, e.paidBy,
-    e.odometer, '', e.rangeLeft, '', e.gallons, e.pricePerGallon, '', '', e.notes, e.id]]);
+    e.odometer, '', e.rangeLeft, '', e.gallons, e.pricePerGallon, '', '', e.notes, e.id, e.expenseFor]]);
 }
 
 function deleteCar_(sheet, id) {
@@ -695,12 +696,27 @@ function recomputeCar_(sheet) {
   return rows;
 }
 
+// Whose turn or cost: V, K or Joint. Blank means the card owner's own turn.
+// ("Both", written by an earlier version, means Joint.)
+function carOwner_(r) {
+  const f = String(r[K.FOR] || '').trim().toUpperCase();
+  if (f === 'V' || f === 'K') return f;
+  if (f === 'JOINT' || f === 'BOTH') return 'Joint';
+  return String(r[K.PAID_BY]);
+}
+
+// What one car cost leaves owed. Positive = K owes V.
+function carOwed_(owner, card, amount) {
+  if (owner === 'Joint') return card === 'V' ? amount / 2 : card === 'K' ? -amount / 2 : 0;
+  return personalOwed_(owner, card, amount);
+}
+
 function carStats_(rows) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const data = rows.filter((r) => !isEmptyCarRow_(r));
   const n = (v) => (v === '' ? 0 : toNumber_(v));
   const s = {
-    v: 0, k: 0, total: 0,
+    v: 0, k: 0, total: 0, owed: 0, turns: { V: 0, K: 0, Joint: 0 },
     fills: 0, gallons: 0, fuelSpend: 0, avgPpg: 0,
     mpg: 0, bestMpg: 0, worstMpg: 0, avgMilesPerTank: 0, avgEffRange: 0,
     fuelCpm: 0, totalCpm: 0, milesTracked: 0, lastOdometer: 0,
@@ -716,6 +732,9 @@ function carStats_(rows) {
     s.total += amount;
     if (r[K.PAID_BY] === 'V') s.v += amount;
     if (r[K.PAID_BY] === 'K') s.k += amount;
+    const owner = carOwner_(r);
+    s.owed += carOwed_(owner, r[K.PAID_BY], amount);
+    if (r[K.CATEGORY] === 'Fuel' && s.turns[owner] !== undefined) s.turns[owner]++;
     s.byCategory[r[K.CATEGORY]] = (s.byCategory[r[K.CATEGORY]] || 0) + amount;
     const month = date.slice(0, 7);
     const m = months[month] || (months[month] = { month: month, fuel: 0, other: 0, total: 0, miles: 0, gallons: 0 });
@@ -758,14 +777,16 @@ function carStats_(rows) {
     return { month: k, fuel: round2_(m.fuel), other: round2_(m.other), total: round2_(m.total), miles: round2_(m.miles),
       mpg: m.gallons ? round2_(m.miles / m.gallons) : '' };
   });
-  ['v', 'k', 'total', 'gallons', 'fuelSpend', 'mpg', 'bestMpg', 'worstMpg', 'avgMilesPerTank', 'avgEffRange', 'milesTracked']
+  ['v', 'k', 'total', 'owed', 'gallons', 'fuelSpend', 'mpg', 'bestMpg', 'worstMpg', 'avgMilesPerTank', 'avgEffRange', 'milesTracked']
     .forEach((key) => { s[key] = round2_(s[key]); });
   ['avgPpg', 'fuelCpm', 'totalCpm'].forEach((key) => { s[key] = Math.round(s[key] * 1000) / 1000; });
   Object.keys(s.byCategory).forEach((key) => { s.byCategory[key] = round2_(s.byCategory[key]); });
+  s.settle = settleText_(s.owed, -s.owed);
   s.recent = data.slice(-RECENT_COUNT).reverse().map((r) => ({
     id: String(r[K.ID]), date: formatDate_(r[K.DATE], tz), category: String(r[K.CATEGORY]), vendor: String(r[K.VENDOR]),
     amount: toNumber_(r[K.AMOUNT]), paidBy: String(r[K.PAID_BY]), notes: String(r[K.NOTES]),
     odometer: r[K.ODO], miles: r[K.MILES], mpg: r[K.MPG], eff: r[K.EFF], gallons: r[K.GAL], ppg: r[K.PPG],
+    expenseFor: carOwner_(r),
   }));
   return s;
 }
@@ -779,7 +800,7 @@ function writeCarSummary_(sheet, s) {
     line('Spent so far'),                                               // 1
     line('V paid', 'K paid', 'Total spent'),                            // 2
     line(s.v, s.k, s.total),                                            // 3
-    blank(),                                                            // 4
+    line('Owed from joint or other-card costs', s.settle),              // 4
     line('Fuel stats'),                                                 // 5
     line('Average MPG', s.mpg),                                         // 6
     line('Best / worst MPG', s.bestMpg, s.worstMpg),                    // 7
@@ -793,7 +814,7 @@ function writeCarSummary_(sheet, s) {
     line('Fuel spend', s.fuelSpend),                                    // 15
     line('Miles tracked', s.milesTracked),                              // 16
     line('Last odometer', s.lastOdometer),                              // 17
-    blank(),                                                            // 18
+    line('Fill-ups by turn', 'V ' + s.turns.V, 'K ' + s.turns.K, 'Joint ' + s.turns.Joint), // 18
     line('Spend by category'),                                          // 19
   ];
   CAR_CATEGORIES.forEach((c) => out.push(line(c, s.byCategory[c] || 0))); // 20-28
@@ -824,6 +845,7 @@ function writeCarSummary_(sheet, s) {
   cell(2, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6');
   cell(40, 0, 1, WIDTH).setFontWeight('bold').setBackground('#f3f4f6');
   cell(3, 0, 1, 3).setNumberFormat(MONEY);
+  cell(4, 0, 1, 2).setFontWeight('bold');
   [8, 9, 10].forEach((row) => cell(row, 1).setNumberFormat('$0.000'));
   cell(15, 1).setNumberFormat(MONEY);
   cell(20, 1, CAR_CATEGORIES.length + 1, 1).setNumberFormat(MONEY);

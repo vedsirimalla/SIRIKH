@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 12; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 13; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set' };
@@ -10,7 +10,7 @@
     Joint: 'Joint: shared day-to-day spending. Comes out of the monthly budget and counts in who owes whom.',
     Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
     Personal: "Personal: one person's own expense, not in the budget. If it goes on the other person's card, they are owed the full amount.",
-    Car: 'Sonata: car costs and fuel, saved to the Sonata tab. No split; it tracks what V and K have each paid.',
+    Car: "Sonata: car costs and fuel, saved to the Sonata tab. Expense for: whose turn it is (V or K), or Joint to split 50/50.",
   };
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
@@ -25,7 +25,7 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
-    if (op.table === 'car') return 9;
+    if (op.table === 'car') return op.op === 'add' ? 12 : 9;
     if (op.op !== 'add') return 0;
     if (op.entry.type === 'Personal budget') return 10;
     if (op.entry.type === 'Personal') return 9;
@@ -113,6 +113,12 @@
     if (owner === 'K' && card === 'V') return amount;
     if (owner === 'V' && card === 'K') return -amount;
     return 0;
+  }
+
+  // Sonata: own turns owe nothing, Joint splits 50/50, a turn on the other's card is owed in full.
+  function carOwed(owner, card, amount) {
+    if (owner === 'Joint') return card === 'V' ? amount / 2 : card === 'K' ? -amount / 2 : 0;
+    return owedInFull(owner, card, amount);
   }
 
   // Starts from what the sheet last reported and applies changes not synced yet,
@@ -287,7 +293,8 @@
       tag.textContent = isCar ? r.category : TYPE_LABELS[r.type] || r.type || 'Joint';
       const owner = r.expenseFor && r.expenseFor !== 'Both' ? r.expenseFor : '';
       const parts = [prettyDate(r.date)];
-      if (owner && (r.type === 'Personal' || isCar)) parts.push(`for ${owner}`);
+      if (isCar && r.expenseFor === 'Joint') parts.push('Joint');
+      else if (owner && (r.type === 'Personal' || (isCar && owner !== r.paidBy))) parts.push(`for ${owner}`);
       if (r.paidBy === 'V' || r.paidBy === 'K') parts.push(`${r.paidBy}'s card`);
       else if (r.paidBy) parts.push(`by ${r.paidBy}`);
       if (isCar && r.category === 'Fuel') {
@@ -467,17 +474,27 @@
         (c.fills ? `. ${c.fills} fill-ups, ${money(c.fuelSpend)} on fuel.` : '')
       : 'No fill-ups yet. Pick Fuel below to log one.';
 
-    // What each has paid (by card), plus car entries not synced yet. No split: V and K take turns.
+    // What each has paid (by card) and what joint or other-card costs leave owed,
+    // plus car entries not synced yet.
     let v = c ? c.v : 0;
     let k = c ? c.k : 0;
+    let owed = c ? c.owed || 0 : 0;
+    const turns = { V: 0, K: 0, Joint: 0, ...((c && c.turns) || {}) };
     for (const op of getQueue()) {
       if (op.table !== 'car' || op.op !== 'add') continue;
-      if (op.entry.paidBy === 'V') v += op.entry.amount;
-      if (op.entry.paidBy === 'K') k += op.entry.amount;
+      const e = op.entry;
+      if (e.paidBy === 'V') v += e.amount;
+      if (e.paidBy === 'K') k += e.amount;
+      const owner = e.expenseFor || e.paidBy;
+      owed += carOwed(owner, e.paidBy, e.amount);
+      if (e.category === 'Fuel' && turns[owner] !== undefined) turns[owner]++;
     }
+    owed = round2(owed);
     $('carPaidV').textContent = money(round2(v));
     $('carPaidK').textContent = money(round2(k));
     $('carPaidTotal').textContent = money(round2(v + k));
+    $('carSettle').textContent = Math.abs(owed) < 0.01 ? 'Nothing owed for the car' : settleText(owed, -owed);
+    $('carTurns').textContent = `Fill-ups by turn: V ${turns.V} · K ${turns.K} · Joint ${turns.Joint}`;
 
     const cats = $('carCategories');
     cats.innerHTML = '';
@@ -733,6 +750,7 @@
   // Whose expense it is: only asked for Personal (V or K).
   const FOR_OPTIONS = {
     Personal: [['V', 'V'], ['K', 'K']],
+    Car: [['V', 'V'], ['K', 'K'], ['Joint', 'Joint']],
   };
   function setupExpenseFor(type) {
     const options = FOR_OPTIONS[type];
@@ -740,7 +758,8 @@
     $('payGrid').classList.toggle('grid2', !!options);
     if (options) {
       const select = $('expenseFor');
-      const keep = store.get('for.' + type, options[0][0]);
+      // Sonata starts on the card owner's own turn; Personal remembers the last choice.
+      const keep = type === 'Car' ? $('paidBy').value : store.get('for.' + type, options[0][0]);
       select.innerHTML = '';
       for (const [value, label] of options) {
         const opt = document.createElement('option');
@@ -750,6 +769,7 @@
       }
       select.value = options.some(([v]) => v === keep) ? keep : options[0][0];
     }
+    lastCard = $('paidBy').value;
     updateOwedHint();
   }
 
@@ -762,8 +782,14 @@
     const owner = selectedFor();
     const card = $('paidBy').value;
     const hint = $('owedHint');
-    if ((owner !== 'V' && owner !== 'K') || owner === card) { hint.hidden = true; return; }
     const amount = parseAmount($('amount').value);
+    if (owner === 'Joint') {
+      const other = card === 'V' ? 'K' : 'V';
+      hint.textContent = `Joint, split 50/50: ${other} owes ${card} half` + (amount ? ` (${money(amount / 2)}).` : '.');
+      hint.hidden = false;
+      return;
+    }
+    if ((owner !== 'V' && owner !== 'K') || owner === card) { hint.hidden = true; return; }
     hint.textContent = `${owner}'s expense on ${card}'s card: ${owner} owes ${card} the full ` +
       (amount ? money(amount) : 'amount') + '.';
     hint.hidden = false;
@@ -772,7 +798,13 @@
     store.set('for.' + selectedType(), $('expenseFor').value);
     updateOwedHint();
   });
-  $('paidBy').addEventListener('change', updateOwedHint);
+  // In Sonata, Expense for follows the card (the usual own turn) unless set to something else.
+  let lastCard = $('paidBy').value;
+  $('paidBy').addEventListener('change', () => {
+    if (selectedType() === 'Car' && $('expenseFor').value === lastCard) $('expenseFor').value = $('paidBy').value;
+    lastCard = $('paidBy').value;
+    updateOwedHint();
+  });
   $('amount').addEventListener('input', updateOwedHint);
 
   function selectedCarCat() {
@@ -863,6 +895,7 @@
     const entry = {
       id: uuid(), date, category, vendor: $('vendor').value.trim(), amount, paidBy: $('paidBy').value,
       notes: $('notes').value.trim(), odometer, rangeLeft, gallons, pricePerGallon: ppg,
+      expenseFor: selectedFor() || $('paidBy').value,
     };
     enqueue({ op: 'add', table: 'car', entry });
     store.set('paidBy', entry.paidBy);
@@ -878,8 +911,10 @@
     $('saveBtn').disabled = true;
     const status = await sync();
     $('saveBtn').disabled = false;
+    const owes = round2(carOwed(entry.expenseFor, entry.paidBy, amount));
     report(status, `Saved ✓ ${category} ${money(amount)}` +
-      (miles > 0 && gallons ? ` · ${(miles / gallons).toFixed(1)} MPG` : ''));
+      (miles > 0 && gallons ? ` · ${(miles / gallons).toFixed(1)} MPG` : '') +
+      (owes ? ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}` : ''));
   }
 
   $('expenseForm').addEventListener('submit', async (e) => {
