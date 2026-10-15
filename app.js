@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 11; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 12; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set' };
@@ -10,7 +10,7 @@
     Joint: 'Joint: shared day-to-day spending. Comes out of the monthly budget and counts in who owes whom.',
     Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
     Personal: "Personal: one person's own expense, not in the budget. If it goes on the other person's card, they are owed the full amount.",
-    Car: "Sonata: car costs and fuel, saved to the Sonata tab with its own split. Shared costs split 50/50; one person's cost on the other's card is owed in full.",
+    Car: 'Sonata: car costs and fuel, saved to the Sonata tab. No split; it tracks what V and K have each paid.',
   };
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
@@ -467,42 +467,17 @@
         (c.fills ? `. ${c.fills} fill-ups, ${money(c.fuelSpend)} on fuel.` : '')
       : 'No fill-ups yet. Pick Fuel below to log one.';
 
-    // Split: what the sheet reported plus car entries not synced yet. Shared costs split 50/50;
-    // a one-person cost on the other's card is owed in full.
+    // What each has paid (by card), plus car entries not synced yet. No split: V and K take turns.
     let v = c ? c.v : 0;
     let k = c ? c.k : 0;
-    let personal = c ? c.personal || 0 : 0;
     for (const op of getQueue()) {
       if (op.table !== 'car' || op.op !== 'add') continue;
-      const e = op.entry;
-      if (e.expenseFor === 'V' || e.expenseFor === 'K') {
-        personal += owedInFull(e.expenseFor, e.paidBy, e.amount);
-        continue;
-      }
-      if (e.paidBy === 'V') v += e.amount;
-      if (e.paidBy === 'K') k += e.amount;
+      if (op.entry.paidBy === 'V') v += op.entry.amount;
+      if (op.entry.paidBy === 'K') k += op.entry.amount;
     }
-    v = round2(v);
-    k = round2(k);
-    personal = round2(personal);
-    const total = round2(v + k);
-    const split = round2(total / 2);
-    const vShare = round2(v - split);
-    const kShare = round2(k - split);
-    $('carPaidV').textContent = money(v);
-    $('carPaidK').textContent = money(k);
-    $('carPaidTotal').textContent = money(total);
-    $('carEqualSplit').textContent = money(split);
-    for (const [id, n] of [['carShareV', vShare], ['carShareK', kShare]]) {
-      $(id).textContent = signed(n);
-      $(id).className = n >= 0.01 ? 'pos' : n <= -0.01 ? 'neg' : '';
-    }
-    const net = round2(vShare + personal);
-    $('carPersonal').hidden = Math.abs(personal) < 0.01;
-    $('carPersonal').textContent = "One person's cost on the other's card: " + settleText(personal, -personal);
-    $('carOwedV').textContent = money(net < 0 ? -net : 0);
-    $('carOwedK').textContent = money(net > 0 ? net : 0);
-    $('carSettle').textContent = settleText(net, -net);
+    $('carPaidV').textContent = money(round2(v));
+    $('carPaidK').textContent = money(round2(k));
+    $('carPaidTotal').textContent = money(round2(v + k));
 
     const cats = $('carCategories');
     cats.innerHTML = '';
@@ -755,10 +730,9 @@
     render();
   }
 
-  // Whose expense it is: only asked for Personal (V or K) and Sonata (shared, V or K).
+  // Whose expense it is: only asked for Personal (V or K).
   const FOR_OPTIONS = {
     Personal: [['V', 'V'], ['K', 'K']],
-    Car: [['Both', 'Shared'], ['V', 'V'], ['K', 'K']],
   };
   function setupExpenseFor(type) {
     const options = FOR_OPTIONS[type];
@@ -889,7 +863,6 @@
     const entry = {
       id: uuid(), date, category, vendor: $('vendor').value.trim(), amount, paidBy: $('paidBy').value,
       notes: $('notes').value.trim(), odometer, rangeLeft, gallons, pricePerGallon: ppg,
-      expenseFor: selectedFor() || 'Both',
     };
     enqueue({ op: 'add', table: 'car', entry });
     store.set('paidBy', entry.paidBy);
@@ -905,10 +878,8 @@
     $('saveBtn').disabled = true;
     const status = await sync();
     $('saveBtn').disabled = false;
-    const owes = owedInFull(entry.expenseFor, entry.paidBy, amount);
     report(status, `Saved ✓ ${category} ${money(amount)}` +
-      (miles > 0 && gallons ? ` · ${(miles / gallons).toFixed(1)} MPG` : '') +
-      (owes ? ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}` : ''));
+      (miles > 0 && gallons ? ` · ${(miles / gallons).toFixed(1)} MPG` : ''));
   }
 
   $('expenseForm').addEventListener('submit', async (e) => {
