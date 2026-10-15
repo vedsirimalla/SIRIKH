@@ -95,9 +95,10 @@ The script rebuilds these on every save, so the sheet always shows the same numb
 
    Followed by "Settle up (joint)", "Personal on other's card" (owed in full), and "Overall (joint + fixed + personal)".
 2. **Fixed bills:** V paid, K paid, Total, and Settle up for fixed bills.
-3. **Monthly budgets:** Budget, Spent, Remaining for Joint, V personal and K personal.
-4. **Colors:** a legend of the row colors.
-5. **History:** one row per budget period, newest first: Since, Budget, Joint spent, V paid, K paid, V's share, K's share, Settle up, Fixed total, Fixed settle, Personal settle, Overall, V personal spent, K personal spent. Past months stay on record here.
+3. **Personal expenses:** a grid of each person's Personal spending on their own card (nothing owed) and on the other's card (owed in full), then Settle up and Overall (joint + fixed + personal). The app shows the same grid when Personal is selected.
+4. **Monthly budgets:** Budget, Spent, Remaining for Joint, V personal and K personal.
+5. **Colors:** a legend of the row colors.
+6. **History:** one row per budget period, newest first: Since, Budget, Joint spent, V paid, K paid, V's share, K's share, Settle up, Fixed total, Fixed settle, Personal settle, Overall, V personal spent, K personal spent. Past months stay on record here.
 
 Do not type in columns J onward; the script overwrites them.
 
@@ -201,7 +202,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 12" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 14" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

@@ -79,9 +79,25 @@
         </tbody>
       </table>
       <div id="settleLine" class="settle"></div>
-      <div id="personalLine" class="overall" hidden></div>
       <div id="overallLine" class="overall" hidden></div>
       <div class="muted">Share = what each paid minus half the joint total. A personal expense on the other person's card is owed in full.</div>
+    </section>
+
+    <section class="card" id="personalSplitCard" aria-labelledby="pSplitLabel" hidden>
+      <div class="section-head">
+        <h2 id="pSplitLabel">Who owes whom (personal)</h2>
+        <span id="pSplitSince" class="muted"></span>
+      </div>
+      <table class="split">
+        <tbody>
+          <tr><th></th><th scope="col">Own card</th><th scope="col">Other's card</th></tr>
+          <tr><th scope="row">K's expenses</th><td id="kOnK"></td><td id="kOnV"></td></tr>
+          <tr><th scope="row">V's expenses</th><td id="vOnV"></td><td id="vOnK"></td></tr>
+        </tbody>
+      </table>
+      <div id="pSettle" class="settle"></div>
+      <div id="pOverall" class="overall"></div>
+      <div class="muted">Own card: nothing owed. Other's card: owed in full. Overall adds joint expenses and fixed bills.</div>
     </section>
 
     <section class="card fixed-card" id="fixedCard" aria-labelledby="fixedLabel" hidden>

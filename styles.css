@@ -97,6 +97,9 @@ main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
 .split th { font-size: 12px; font-weight: 600; color: var(--muted); text-align: left; padding: 8px 4px 2px; }
 .split td { font-size: 16px; font-weight: 700; padding: 0 4px 6px; border-bottom: 1px solid var(--border); }
 .split tr:last-child td { border-bottom: none; }
+.split th[scope="row"] { color: var(--text); font-size: 14px; padding: 6px 4px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.split th[scope="row"] ~ td { padding: 6px 4px; vertical-align: middle; }
+.split tr:last-child th[scope="row"] { border-bottom: none; }
 .split .pos { color: var(--pos); }
 .split .neg { color: var(--err); }
 .overall { font-weight: 600; margin-bottom: 4px; }

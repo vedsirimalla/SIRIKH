@@ -38,7 +38,7 @@
 
 const TAB_NAME = 'Sirikh';
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 12;
+const BACKEND_VERSION = 14;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Balance ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget'];
@@ -315,7 +315,10 @@ function personalBudgets_(rows) {
 function emptyPeriod_() {
   // personal: net of Personal expenses paid on the other's card (positive = K owes V)
   // pv / pk: Personal expenses for V / K during the period (for History)
-  return { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, pv: 0, pk: 0 };
+  // Personal expenses by whose expense and whose card: kOnK / vOnV on their own card (nothing owed),
+  // kOnV / vOnK on the other's card (owed in full)
+  return { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, pv: 0, pk: 0,
+    kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0 };
 }
 
 // One entry per budget period. A period starts at a "Set balance" row and runs until the next one.
@@ -346,6 +349,8 @@ function periods_(rows) {
     }
     if (r[C.TYPE] === 'Personal') {
       p.personal += personalOwed_(owner_(r), r[C.PAID_BY], amount);
+      const key = { KK: 'kOnK', KV: 'kOnV', VV: 'vOnV', VK: 'vOnK' }[owner_(r) + r[C.PAID_BY]];
+      if (key) p[key] += amount;
       if (owner_(r) === 'V') p.pv += amount;
       if (owner_(r) === 'K') p.pk += amount;
     }
@@ -417,19 +422,26 @@ function writeSummary_(sheet, periods, personal) {
     line(p.fv, p.fk, p.fixed),                                                        // 12
     line('Settle up', s.fixedSettle),                                                 // 13
     blank(),                                                                          // 14
-    line('Monthly budgets'),                                                          // 15
-    line('Budget for', 'Budget', 'Spent', 'Remaining'),                               // 16
-    line('Joint', budget, p.spent, round2_(budget - p.spent)),                        // 17
-    pbLine('V'),                                                                      // 18
-    pbLine('K'),                                                                      // 19
-    blank(),                                                                          // 20
-    line('Colors'),                                                                   // 21
-    line('Joint', 'no color'),                                                        // 22
-    line('Personal V', 'expense for V'),                                              // 23
-    line('Personal K', 'expense for K'),                                              // 24
-    line('Fixed V', "V's card"),                                                      // 25
-    line('Fixed K', "K's card"),                                                      // 26
+    line('Personal expenses'),                                                        // 15
+    line('', 'Own card', "Other's card (owed in full)"),                              // 16
+    line("K's expenses", p.kOnK, p.kOnV),                                             // 17
+    line("V's expenses", p.vOnV, p.vOnK),                                             // 18
+    line('Settle up', s.personalSettle),                                              // 19
+    line('Overall (joint + fixed + personal)', s.overall),                            // 20
+    blank(),                                                                          // 21
+    line('Monthly budgets'),                                                          // 22
+    line('Budget for', 'Budget', 'Spent', 'Remaining'),                               // 23
+    line('Joint', budget, p.spent, round2_(budget - p.spent)),                        // 24
+    pbLine('V'),                                                                      // 25
+    pbLine('K'),                                                                      // 26
     blank(),                                                                          // 27
+    line('Colors'),                                                                   // 28
+    line('Joint', 'no color'),                                                        // 29
+    line('Personal V', 'expense for V'),                                              // 30
+    line('Personal K', 'expense for K'),                                              // 31
+    line('Fixed V', "V's card"),                                                      // 32
+    line('Fixed K', "K's card"),                                                      // 33
+    blank(),                                                                          // 34
   ];
   const historyTitle = out.length + 1;
   out.push(line('History'));
@@ -451,16 +463,18 @@ function writeSummary_(sheet, periods, personal) {
 
   const cell = (row, col, rows, cols) => sheet.getRange(row, SUMMARY_COL + col, rows || 1, cols || 1);
   [3, 5, 12].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
-  cell(17, 1, 3, 3).setNumberFormat(MONEY);
-  [1, 10, 15, 21, historyTitle].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
-  [2, 4, 11, historyTitle + 1].forEach((row) => cell(row, 0, 1, row === historyTitle + 1 ? WIDTH : 3)
+  cell(17, 1, 2, 2).setNumberFormat(MONEY);
+  cell(24, 1, 3, 3).setNumberFormat(MONEY);
+  [1, 10, 15, 22, 28, historyTitle].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
+  [2, 4, 11, 16, historyTitle + 1].forEach((row) => cell(row, 0, 1, row === historyTitle + 1 ? WIDTH : 3)
     .setFontWeight('bold').setBackground('#f3f4f6'));
-  cell(16, 0, 1, 4).setFontWeight('bold').setBackground('#f3f4f6');
-  [6, 7, 8, 13].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
-  cell(23, 0).setBackground(COLORS.personalV);
-  cell(24, 0).setBackground(COLORS.personalK);
-  cell(25, 0).setBackground(COLORS.fixedV);
-  cell(26, 0).setBackground(COLORS.fixedK);
+  cell(23, 0, 1, 4).setFontWeight('bold').setBackground('#f3f4f6');
+  cell(17, 0, 2, 1).setFontWeight('bold');
+  [6, 7, 8, 13, 19, 20].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
+  cell(30, 0).setBackground(COLORS.personalV);
+  cell(31, 0).setBackground(COLORS.personalK);
+  cell(32, 0).setBackground(COLORS.fixedV);
+  cell(33, 0).setBackground(COLORS.fixedK);
   if (periods.length) {
     cell(historyStart, 1, periods.length, 6).setNumberFormat(MONEY);
     cell(historyStart, 8, periods.length, 1).setNumberFormat(MONEY);

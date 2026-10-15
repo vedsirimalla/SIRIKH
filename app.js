@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 13; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 15; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set' };
@@ -126,7 +126,7 @@
   function estimate() {
     const state = getState();
     const recent = state ? state.recent || [] : [];
-    const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, ...(state && state.period) };
+    const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0, ...(state && state.period) };
     let balance = state ? Number(state.balance) || 0 : 0;
     let hasBalance = state ? !!state.hasBalance : false;
 
@@ -144,7 +144,12 @@
         if (e.paidBy === 'V') p.fv += amt;
         if (e.paidBy === 'K') p.fk += amt;
       }
-      if (e.type === 'Personal') p.personal += owedInFull(e.expenseFor || e.paidBy, e.paidBy, amt);
+      if (e.type === 'Personal') {
+        const owner = e.expenseFor || e.paidBy;
+        p.personal += owedInFull(owner, e.paidBy, amt);
+        const key = { KK: 'kOnK', KV: 'kOnV', VV: 'vOnV', VK: 'vOnK' }[owner + e.paidBy];
+        if (key) p[key] += amt;
+      }
     };
 
     const queue = getQueue();
@@ -152,7 +157,7 @@
       if (op.op === 'add' && op.entry.type === 'Set balance') {
         balance = op.entry.amount;
         hasBalance = true;
-        Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0 });
+        Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0 });
       } else if (op.op === 'add' && op.table !== 'car') {
         apply(op.entry, 1);
       } else {
@@ -160,7 +165,7 @@
         if (e) apply(e, -1);
       }
     }
-    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'personal']) p[k] = round2(p[k]);
+    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'personal', 'kOnK', 'kOnV', 'vOnV', 'vOnK']) p[k] = round2(p[k] || 0);
     return { balance: round2(balance), hasBalance, unsynced: queue.length, period: p };
   }
 
@@ -233,12 +238,16 @@
     const fkShare = round2(p.fk - fSplit);
     const hasFixed = p.fixed !== 0 || p.fv !== 0 || p.fk !== 0;
     const pn = round2(p.personal || 0);
+    const overall = 'Overall (joint + fixed + personal): ' + settleText(round2(vShare + fvShare + pn), round2(kShare + fkShare - pn));
     $('fixedCard').hidden = !hasFixed;
-    $('personalLine').hidden = Math.abs(pn) < 0.01;
-    $('personalLine').textContent = "Personal on the other's card: " + settleText(pn, -pn);
     $('overallLine').hidden = !hasFixed && Math.abs(pn) < 0.01;
-    $('overallLine').textContent = (hasFixed ? 'Overall with fixed bills and personal: ' : 'Overall with personal: ') +
-      settleText(round2(vShare + fvShare + pn), round2(kShare + fkShare - pn));
+    $('overallLine').textContent = overall;
+
+    // Personal mode shows its own table: personal expenses paid on the other person's card.
+    for (const key of ['kOnK', 'kOnV', 'vOnV', 'vOnK']) $(key).textContent = money(p[key] || 0);
+    $('pSplitSince').textContent = 'Since ' + prettyDate(p.since);
+    $('pSettle').textContent = settleText(pn, -pn);
+    $('pOverall').textContent = overall;
     if (!hasFixed) return;
     $('fixedV').textContent = money(p.fv);
     $('fixedK').textContent = money(p.fk);
@@ -335,6 +344,9 @@
     renderPersonalBudgets();
     $('jointCard').hidden = type !== 'Joint';
     $('personalBudgetCard').hidden = type !== 'Personal';
+    const hasBalance = estimate().hasBalance;
+    $('splitCard').hidden = !hasBalance || type === 'Personal';
+    $('personalSplitCard').hidden = !hasBalance || type !== 'Personal';
     if (type === 'Fixed') $('fixedCard').hidden = false;
     if (type === 'Personal') $('fixedCard').hidden = true;
     if (isCar) renderCar();
