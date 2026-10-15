@@ -6,11 +6,18 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 
 ## Features
 
-- **Entry form:** Date (calendar, defaults to today), Type (Joint, Fixed, Personal or Sonata), Category, Amount, Paid By (V or K), Notes.
+- **Entry form:** Date (calendar, defaults to today), Type (Joint, Fixed, Personal or Sonata), Category, Amount, Expense for, Card used, Notes.
+  - **Card used:** whose card paid (V's card or K's card).
+  - **Expense for:** whose expense it is. Asked only for Personal (V or K) and Sonata (Shared, V or K). Joint and Fixed are always shared.
+  - **Owed in full:** a one-person expense on the other person's card is owed back in full. Example: K orders ramen for herself and it goes on V's card, so K owes V the whole amount. The app shows this before you save.
   - **Joint and Personal:** Category is a plain typing field (no dropdown).
   - **Fixed:** Category is replaced by buttons for exactly five bills: Rent, Utilities, Electricity, Wi-Fi, Misc.
   - The text under Type explains the selected type.
-- **Monthly budget:**
+- **Budgets by type:** the budget card follows the selected Type.
+  - **Joint:** the joint monthly budget (below).
+  - **Personal:** a personal budget for V and one for K. **Set personal budget** sets either or both. Each Personal expense comes out of the budget of the person it is for, whoever's card paid (K's ramen on V's card reduces K's budget, and K still owes V).
+  - **Fixed and Sonata:** no budget. Fixed bills get paid regardless; Sonata shows car stats instead.
+- **Joint monthly budget:**
   - **Set monthly budget** starts a new budget, for example $705 on the 1st.
   - **Joint** expenses are deducted the moment they are saved.
   - **Fixed** bills (rent, utilities) and **Personal** expenses are not taken from the budget.
@@ -59,15 +66,17 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 
 ## Sirikh tab layout
 
-| Date | Category | Amount ($) | Paid By | Notes | Type | Balance ($) | ID (hidden) |
-|---|---|---|---|---|---|---|---|
-| 2026-10-01 | Balance set | $705.00 | Both | October budget | Set balance | $705.00 | |
+| Date | Category | Amount ($) | Card Used | Notes | Type | Balance ($) | ID (hidden) | Expense For |
+|---|---|---|---|---|---|---|---|---|
+| 2026-10-01 | Balance set | $705.00 | Both | October budget | Set balance | $705.00 | | |
 | 2026-10-02 | Costco | $45.20 | K | Paneer, grapes | Joint | $659.80 | |
 | 2026-10-02 | Haircut | $20.00 | V | | Personal | $659.80 | |
 | 2026-10-01 | Rent | $1,800.00 | V | | Fixed | $659.80 | |
 
-- **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance` (or `Add funds` typed by hand). Blank counts as Joint.
-- **Row colors** are set by the script from Type, Paid By and Category, and update after hand edits.
+- **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance`, `Personal budget` (or `Add funds` typed by hand). Blank counts as Joint.
+- **Personal budget** rows start a new personal budget for the person in Expense For.
+- **Expense For** is filled for Personal rows (V or K). Personal rows saved before this column existed count as the card owner's.
+- **Row colors** are set by the script from Type, Expense For and Card Used, and update after hand edits.
 - **Balance ($)** is recalculated top to bottom by the script, including after hand edits to Amount or Type.
 - **ID** prevents duplicates and identifies rows to delete. Do not edit it.
 - **Set balance** rows start a new budget. Everything below the most recent one belongs to the current month.
@@ -84,11 +93,11 @@ The script rebuilds these on every save, so the sheet always shows the same numb
    | **V's share** | **K's share** | **Equal split** |
    | -136.49 | 136.49 | 347.92 |
 
-   Followed by "Settle up: V owes K $136.49" and "Including fixed bills: ...".
+   Followed by "Settle up (joint)", "Personal on other's card" (owed in full), and "Overall (joint + fixed + personal)".
 2. **Fixed bills:** V paid, K paid, Total, and Settle up for fixed bills.
-3. **Monthly budget:** Budget, Spent, Remaining.
+3. **Monthly budgets:** Budget, Spent, Remaining for Joint, V personal and K personal.
 4. **Colors:** a legend of the row colors.
-5. **History:** one row per budget period, newest first: Since, Budget, Joint spent, V paid, K paid, V's share, K's share, Settle up, Fixed total, Fixed settle, Overall. Past months stay on record here.
+5. **History:** one row per budget period, newest first: Since, Budget, Joint spent, V paid, K paid, V's share, K's share, Settle up, Fixed total, Fixed settle, Personal settle, Overall, V personal spent, K personal spent. Past months stay on record here.
 
 Do not type in columns J onward; the script overwrites them.
 
@@ -100,7 +109,7 @@ Pick **Sonata** under Type. The form switches to car fields and the dashboard sh
 - **Fuel entry:** gas station, odometer, range left, gallons, price per gallon. Amount fills in from gallons x price. A live preview shows miles, MPG and effective range before you save. An odometer lower than the last fill-up is rejected.
 - **Other categories:** vendor or description and amount.
 
-Columns: Date | Category | Station / Vendor | Amount ($) | Paid By | Odometer | Miles Driven | Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID (hidden)
+Columns: Date | Category | Station / Vendor | Amount ($) | Card Used | Odometer | Miles Driven | Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID (hidden) | Expense For
 
 Calculated by the script for Fuel rows, in odometer order:
 
@@ -115,7 +124,7 @@ A fill-up covering more than 1.6x a typical tank (a fill-up was missed in betwee
 
 Columns Q onward (rebuilt on every save):
 
-1. **Who owes whom (car):** V paid, K paid, Total; V's share, K's share, Equal split; Owed by V, Owed by K; Settle up.
+1. **Who owes whom (car):** shared costs (Expense For = Both): V paid, K paid, Total; V's share, K's share, Equal split. Then one person's costs on the other's card (owed in full), Owed by V, Owed by K, and Settle up.
 2. **Fuel stats:** average, best and worst MPG; average price per gallon; fuel and total cost per mile; average miles per tank; average effective range; fill-ups; gallons; fuel spend; miles tracked; last odometer.
 3. **Spend by category** and total car spend.
 4. **Monthly table and fuel log** (from row 40), which feed four charts: MPG per fill-up, price per gallon, fuel cost per mile, and car spend per month.
@@ -188,7 +197,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 8" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 10" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

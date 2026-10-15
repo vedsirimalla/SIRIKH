@@ -10,13 +10,19 @@
  *   Deploy > Manage deployments > Edit (pencil) > Version: New version > Deploy (the /exec URL stays the same).
  *
  * Tab "Sirikh" (created automatically):
- *   Date | Category | Amount ($) | Paid By | Notes | Type | Balance ($) | ID
+ *   Date | Category | Amount ($) | Card Used | Notes | Type | Balance ($) | ID | Expense For
+ *
+ * Card Used is whose card paid. Expense For is whose expense it is: blank (shared) for Joint and
+ * Fixed, V or K for Personal. A Personal expense paid on the other person's card is owed back in
+ * full (K's ramen on V's card: K owes V the whole amount).
  *
  * Type is one of:
  *   Joint        shared day-to-day expense, deducted from the monthly budget      (no color)
  *   Fixed        rent, utilities and other bills, tracked separately (orange: V light, K darker)
  *   Personal     logged only                                                     (blue: V light, K darker)
- *   Set balance  starts a new monthly budget
+ *   Set balance      starts a new joint monthly budget (only Joint expenses come out of it)
+ *   Personal budget  starts a new personal budget for V or K (Expense For); that person's Personal
+ *                    expenses come out of it, whoever's card paid. Fixed and Sonata have no budget.
  *   Add funds    adds to the budget (only from hand edits; the app no longer offers it)
  * Balance ($) and the row colors are recalculated by this script from top to bottom, so edits
  * made by hand in the tab are picked up automatically. Negative amounts are refunds.
@@ -32,10 +38,10 @@
 
 const TAB_NAME = 'Sirikh';
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 8;
-const HEADERS = ['Date', 'Category', 'Amount ($)', 'Paid By', 'Notes', 'Type', 'Balance ($)', 'ID'];
-const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7 };
-const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance'];
+const BACKEND_VERSION = 10;
+const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Balance ($)', 'ID', 'Expense For'];
+const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
+const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget'];
 // Row colors by who paid: Personal in blues, Fixed bills in oranges (V lighter, K darker).
 const COLORS = {
   personalV: '#dbeafe',
@@ -87,7 +93,10 @@ function doPost(e) {
 function onEdit(e) {
   const sheet = e && e.range && e.range.getSheet();
   if (!sheet) return;
-  if (sheet.getName() === TAB_NAME && e.range.getColumn() < SUMMARY_COL) writeSummary_(sheet, periods_(recompute_(sheet)));
+  if (sheet.getName() === TAB_NAME && e.range.getColumn() < SUMMARY_COL) {
+    const rows = recompute_(sheet);
+    writeSummary_(sheet, periods_(rows), personalBudgets_(rows));
+  }
   if (sheet.getName() === CAR_TAB && e.range.getColumn() < CAR_SUMMARY_COL) carState_(sheet);
 }
 
@@ -112,6 +121,7 @@ function getSheet_() {
 function validate_(b) {
   const type = TYPES.indexOf(b.type) !== -1 ? b.type : 'Joint';
   const isFunds = type === 'Add funds' || type === 'Set balance';
+  const isPersonalBudget = type === 'Personal budget';
 
   const date = String(b.date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Invalid date.');
@@ -119,15 +129,24 @@ function validate_(b) {
   const amount = Number(b.amount);
   if (!isFinite(amount)) throw new Error('Invalid amount.');
   if (amount === 0 && type !== 'Set balance') throw new Error('Amount cannot be 0.');
+  if (isPersonalBudget && amount < 0) throw new Error('A budget cannot be negative.');
 
-  const paidBy = String(b.paidBy || '');
+  // A personal budget belongs to one person; there is no card involved.
+  const paidBy = isPersonalBudget ? String(b.expenseFor || '') : String(b.paidBy || '');
   const payers = isFunds ? ['V', 'K', 'Both'] : ['V', 'K'];
-  if (payers.indexOf(paidBy) === -1) throw new Error('Paid By must be ' + payers.join(', ') + '.');
+  if (payers.indexOf(paidBy) === -1) throw new Error('Card used must be ' + payers.join(', ') + '.');
+  // Only Personal expenses belong to one person; older apps send nothing, meaning the card owner.
+  let expenseFor = '';
+  if (type === 'Personal' || isPersonalBudget) {
+    expenseFor = b.expenseFor === undefined || b.expenseFor === '' ? paidBy : String(b.expenseFor);
+    if (expenseFor !== 'V' && expenseFor !== 'K') throw new Error('Expense for must be V or K.');
+  }
 
   let category = String(b.category || '').trim();
   if (!category) {
-    if (!isFunds) throw new Error('Category is required.');
-    category = type === 'Set balance' ? 'Balance set' : 'Funds added';
+    if (isPersonalBudget) category = expenseFor + "'s personal budget";
+    else if (!isFunds) throw new Error('Category is required.');
+    else category = type === 'Set balance' ? 'Balance set' : 'Funds added';
   }
 
   return {
@@ -138,6 +157,7 @@ function validate_(b) {
     paidBy: paidBy,
     notes: safeText_(String(b.notes || '').trim().slice(0, 500)),
     type: type,
+    expenseFor: expenseFor,
   };
 }
 
@@ -151,7 +171,7 @@ function addEntry_(sheet, entry) {
   if (ids_(sheet).indexOf(entry.id) !== -1) return;
   const row = nextRow_(sheet);
   sheet.getRange(row, 1, 1, HEADERS.length)
-    .setValues([[entry.date, entry.category, entry.amount, entry.paidBy, entry.notes, entry.type, '', entry.id]]);
+    .setValues([[entry.date, entry.category, entry.amount, entry.paidBy, entry.notes, entry.type, '', entry.id, entry.expenseFor]]);
   sheet.getRange(row, C.DATE + 1).setNumberFormat('yyyy-mm-dd');
   sheet.getRange(row, C.AMOUNT + 1).setNumberFormat('$#,##0.00');
 }
@@ -217,9 +237,15 @@ function recompute_(sheet) {
 
 function rowColor_(r) {
   if (isEmptyRow_(r)) return null;
-  if (r[C.TYPE] === 'Personal') return r[C.PAID_BY] === 'K' ? COLORS.personalK : COLORS.personalV;
+  if (r[C.TYPE] === 'Personal') return owner_(r) === 'K' ? COLORS.personalK : COLORS.personalV;
   if (r[C.TYPE] === 'Fixed') return r[C.PAID_BY] === 'K' ? COLORS.fixedK : COLORS.fixedV;
   return null; // Joint and budget rows stay plain
+}
+
+// Whose Personal expense this is (rows saved before Expense For existed belong to the card owner).
+function owner_(r) {
+  const f = String(r[C.FOR] || '').trim().toUpperCase();
+  return f === 'V' || f === 'K' ? f : String(r[C.PAID_BY]);
 }
 
 function colorRows_(sheet, rows) {
@@ -241,12 +267,13 @@ function state_(sheet) {
   const data = rows.filter((r) => !isEmptyRow_(r));
   const all = periods_(rows);
   const period = all.length ? all[all.length - 1] : emptyPeriod_();
-  writeSummary_(sheet, all);
+  writeSummary_(sheet, all, personalBudgets_(rows));
   return {
     ok: true,
     version: BACKEND_VERSION,
     balance: data.length ? data[data.length - 1][C.BALANCE] : 0,
     hasBalance: period.since !== '',
+    personalBudgets: personalBudgets_(rows),
     period: period,
     recent: data.slice(-RECENT_COUNT).reverse().map((r) => ({
       id: String(r[C.ID]),
@@ -257,12 +284,38 @@ function state_(sheet) {
       notes: String(r[C.NOTES]),
       type: r[C.TYPE],
       balance: r[C.BALANCE],
+      expenseFor: r[C.TYPE] === 'Personal' || r[C.TYPE] === 'Personal budget' ? owner_(r) : '',
     })),
   };
 }
 
+// Each person's current personal budget: starts at their latest "Personal budget" row; every
+// Personal expense for that person after it (whoever's card paid) comes out of it.
+function personalBudgets_(rows) {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const out = { V: null, K: null };
+  rows.filter((r) => !isEmptyRow_(r)).forEach((r) => {
+    const who = owner_(r);
+    if (who !== 'V' && who !== 'K') return;
+    if (r[C.TYPE] === 'Personal budget') {
+      out[who] = { since: formatDate_(r[C.DATE], tz), budget: toNumber_(r[C.AMOUNT]), spent: 0 };
+    } else if (r[C.TYPE] === 'Personal' && out[who]) {
+      out[who].spent += toNumber_(r[C.AMOUNT]);
+    }
+  });
+  ['V', 'K'].forEach((who) => {
+    const b = out[who];
+    if (!b) return;
+    b.spent = round2_(b.spent);
+    b.remaining = round2_(b.budget - b.spent);
+  });
+  return out;
+}
+
 function emptyPeriod_() {
-  return { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0 };
+  // personal: net of Personal expenses paid on the other's card (positive = K owes V)
+  // pv / pk: Personal expenses for V / K during the period (for History)
+  return { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, pv: 0, pk: 0 };
 }
 
 // One entry per budget period. A period starts at a "Set balance" row and runs until the next one.
@@ -291,9 +344,21 @@ function periods_(rows) {
       if (r[C.PAID_BY] === 'V') p.fv += amount;
       if (r[C.PAID_BY] === 'K') p.fk += amount;
     }
+    if (r[C.TYPE] === 'Personal') {
+      p.personal += personalOwed_(owner_(r), r[C.PAID_BY], amount);
+      if (owner_(r) === 'V') p.pv += amount;
+      if (owner_(r) === 'K') p.pk += amount;
+    }
   });
   list.forEach((x) => Object.keys(x).forEach((k) => { if (typeof x[k] === 'number') x[k] = round2_(x[k]); }));
   return list;
+}
+
+// A one-person expense paid on the other's card is owed back in full. Positive = K owes V.
+function personalOwed_(owner, card, amount) {
+  if (owner === 'K' && card === 'V') return amount;
+  if (owner === 'V' && card === 'K') return -amount;
+  return 0;
 }
 
 function settleText_(vShare, kShare) {
@@ -314,19 +379,26 @@ function shares_(p) {
     fvShare: round2_(p.fv - fSplit),
     fkShare: round2_(p.fk - fSplit),
   };
+  const pn = round2_(p.personal || 0);
   s.settle = settleText_(s.vShare, s.kShare);
   s.fixedSettle = settleText_(s.fvShare, s.fkShare);
-  s.overall = settleText_(round2_(s.vShare + s.fvShare), round2_(s.kShare + s.fkShare));
+  s.personalSettle = settleText_(pn, -pn);
+  s.overall = settleText_(round2_(s.vShare + s.fvShare + pn), round2_(s.kShare + s.fkShare - pn));
   return s;
 }
 
 // Rebuilds the tables in columns J onward: the same "Who owes whom" and "Fixed bills" tables
 // as the app, the monthly budget, a color legend, and a history row for every budget period.
-function writeSummary_(sheet, periods) {
-  const WIDTH = 11; // J:T
+function writeSummary_(sheet, periods, personal) {
+  const WIDTH = 14; // J:W
   const p = periods.length ? periods[periods.length - 1] : emptyPeriod_();
   const s = shares_(p);
   const budget = round2_(p.start + p.added);
+  const pb = personal || { V: null, K: null };
+  const pbLine = (who) => {
+    const b = pb[who];
+    return b ? line(who + ' personal', b.budget, b.spent, b.remaining, 'Since ' + b.since) : line(who + ' personal', 'not set');
+  };
   const blank = () => new Array(WIDTH).fill('');
   const line = (...cells) => cells.concat(new Array(WIDTH - cells.length).fill(''));
 
@@ -336,35 +408,38 @@ function writeSummary_(sheet, periods) {
     line(p.v, p.k, p.spent),                                                          // 3
     line("V's share", "K's share", 'Equal split'),                                    // 4
     line(s.vShare, s.kShare, s.split),                                                // 5
-    line('Settle up', s.settle),                                                      // 6
-    line('Including fixed bills', s.overall),                                         // 7
-    blank(),                                                                          // 8
-    line('Fixed bills'),                                                              // 9
-    line('V paid', 'K paid', 'Total'),                                                // 10
-    line(p.fv, p.fk, p.fixed),                                                        // 11
-    line('Settle up', s.fixedSettle),                                                 // 12
-    blank(),                                                                          // 13
-    line('Monthly budget'),                                                           // 14
-    line('Budget', 'Spent', 'Remaining'),                                             // 15
-    line(budget, p.spent, round2_(budget - p.spent)),                                 // 16
-    blank(),                                                                          // 17
-    line('Colors'),                                                                   // 18
-    line('Joint', 'no color'),                                                        // 19
-    line('Personal V'),                                                               // 20
-    line('Personal K'),                                                               // 21
+    line('Settle up (joint)', s.settle),                                              // 6
+    line("Personal on other's card", s.personalSettle),                               // 7
+    line('Overall (joint + fixed + personal)', s.overall),                            // 8
+    blank(),                                                                          // 9
+    line('Fixed bills'),                                                              // 10
+    line('V paid', 'K paid', 'Total'),                                                // 11
+    line(p.fv, p.fk, p.fixed),                                                        // 12
+    line('Settle up', s.fixedSettle),                                                 // 13
+    blank(),                                                                          // 14
+    line('Monthly budgets'),                                                          // 15
+    line('Budget for', 'Budget', 'Spent', 'Remaining'),                               // 16
+    line('Joint', budget, p.spent, round2_(budget - p.spent)),                        // 17
+    pbLine('V'),                                                                      // 18
+    pbLine('K'),                                                                      // 19
+    blank(),                                                                          // 20
+    line('Colors'),                                                                   // 21
+    line('Joint', 'no color'),                                                        // 22
+    line('Personal V', 'expense for V'),                                              // 23
+    line('Personal K', 'expense for K'),                                              // 24
+    line('Fixed V', "V's card"),                                                      // 25
+    line('Fixed K', "K's card"),                                                      // 26
+    blank(),                                                                          // 27
   ];
-  out.push(line('Fixed V'));                                                        // 22
-  out.push(line('Fixed K'));                                                        // 23
-  out.push(blank());
   const historyTitle = out.length + 1;
   out.push(line('History'));
   out.push(line('Since', 'Budget', 'Joint spent', 'V paid', 'K paid', "V's share", "K's share",
-    'Settle up', 'Fixed total', 'Fixed settle', 'Overall'));
+    'Settle up', 'Fixed total', 'Fixed settle', 'Personal settle', 'Overall', 'V personal spent', 'K personal spent'));
   const historyStart = out.length + 1;
   periods.slice().reverse().forEach((x) => {
     const h = shares_(x);
     out.push([x.since, round2_(x.start + x.added), x.spent, x.v, x.k, h.vShare, h.kShare,
-      h.settle, x.fixed, h.fixedSettle, h.overall]);
+      h.settle, x.fixed, h.fixedSettle, h.personalSettle, h.overall, x.pv, x.pk]);
   });
 
   // Clear the whole area first: rows deleted near the top can shift old values and colors into it.
@@ -375,18 +450,21 @@ function writeSummary_(sheet, periods) {
   sheet.getRange(1, SUMMARY_COL, out.length, WIDTH).setValues(out);
 
   const cell = (row, col, rows, cols) => sheet.getRange(row, SUMMARY_COL + col, rows || 1, cols || 1);
-  [3, 5, 11, 16].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
-  [1, 9, 14, 18, historyTitle].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
-  [2, 4, 10, 15, historyTitle + 1].forEach((row) => cell(row, 0, 1, row === historyTitle + 1 ? WIDTH : 3)
+  [3, 5, 12].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
+  cell(17, 1, 3, 3).setNumberFormat(MONEY);
+  [1, 10, 15, 21, historyTitle].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
+  [2, 4, 11, historyTitle + 1].forEach((row) => cell(row, 0, 1, row === historyTitle + 1 ? WIDTH : 3)
     .setFontWeight('bold').setBackground('#f3f4f6'));
-  [6, 7, 12].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
-  cell(20, 0).setBackground(COLORS.personalV);
-  cell(21, 0).setBackground(COLORS.personalK);
-  cell(22, 0).setBackground(COLORS.fixedV);
-  cell(23, 0).setBackground(COLORS.fixedK);
+  cell(16, 0, 1, 4).setFontWeight('bold').setBackground('#f3f4f6');
+  [6, 7, 8, 13].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
+  cell(23, 0).setBackground(COLORS.personalV);
+  cell(24, 0).setBackground(COLORS.personalK);
+  cell(25, 0).setBackground(COLORS.fixedV);
+  cell(26, 0).setBackground(COLORS.fixedK);
   if (periods.length) {
     cell(historyStart, 1, periods.length, 6).setNumberFormat(MONEY);
     cell(historyStart, 8, periods.length, 1).setNumberFormat(MONEY);
+    cell(historyStart, 12, periods.length, 2).setNumberFormat(MONEY);
   }
 }
 
@@ -416,8 +494,11 @@ function formatDate_(v, tz) {
 // ======================================================================================
 // Sonata: car expenses and fuel tracking, kept in its own tab and table.
 //
-//   Date | Category | Station / Vendor | Amount ($) | Paid By | Odometer | Miles Driven |
-//   Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID
+//   Date | Category | Station / Vendor | Amount ($) | Card Used | Odometer | Miles Driven |
+//   Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID | Expense For
+//
+// Expense For is Both (shared, split 50/50) or V or K (one person's car cost, for example K's turn
+// to fill up). A one-person cost paid on the other's card is owed back in full.
 //
 // Calculated by this script for Fuel rows (ordered by odometer):
 //   Miles Driven    = this odometer - previous fill-up's odometer
@@ -431,10 +512,10 @@ function formatDate_(v, tz) {
 // ======================================================================================
 
 const CAR_TAB = 'Sonata';
-const CAR_HEADERS = ['Date', 'Category', 'Station / Vendor', 'Amount ($)', 'Paid By', 'Odometer', 'Miles Driven',
-  'Range Left', 'Effective Range', 'Gallons', 'Price/Gal', 'MPG', 'Cost/Mile', 'Notes', 'ID'];
+const CAR_HEADERS = ['Date', 'Category', 'Station / Vendor', 'Amount ($)', 'Card Used', 'Odometer', 'Miles Driven',
+  'Range Left', 'Effective Range', 'Gallons', 'Price/Gal', 'MPG', 'Cost/Mile', 'Notes', 'ID', 'Expense For'];
 const K = { DATE: 0, CATEGORY: 1, VENDOR: 2, AMOUNT: 3, PAID_BY: 4, ODO: 5, MILES: 6, RANGE: 7, EFF: 8,
-  GAL: 9, PPG: 10, MPG: 11, CPM: 12, NOTES: 13, ID: 14 };
+  GAL: 9, PPG: 10, MPG: 11, CPM: 12, NOTES: 13, ID: 14, FOR: 15 };
 const CAR_CATEGORIES = ['Fuel', 'Servicing', 'Repairs', 'Mods', 'Insurance', 'Registration/Tax',
   'Tolls/Parking', 'Car wash', 'Misc'];
 const CAR_SUMMARY_COL = 17; // column Q
@@ -489,7 +570,7 @@ function importOldFuelLog_(sheet) {
     if (date === '' || amount === '' || toNumber_(amount) === 0) return;
     const paidBy = String(cells[3]).trim().toUpperCase();
     rows.push([date, 'Fuel', String(cells[1]).trim(), toNumber_(amount), paidBy === 'K' ? 'K' : paidBy === 'V' ? 'V' : '',
-      num(cells[4]), '', num(cells[6]), '', num(cells[8]), num(cells[9]), '', '', String(cells[10]).trim(), Utilities.getUuid()]);
+      num(cells[4]), '', num(cells[6]), '', num(cells[8]), num(cells[9]), '', '', String(cells[10]).trim(), Utilities.getUuid(), 'Both']);
   });
   if (rows.length) sheet.getRange(2, 1, rows.length, CAR_HEADERS.length).setValues(rows);
 }
@@ -500,7 +581,9 @@ function validateCar_(b) {
   const category = CAR_CATEGORIES.indexOf(b.category) !== -1 ? b.category : '';
   if (!category) throw new Error('Pick a car category.');
   const paidBy = String(b.paidBy || '');
-  if (paidBy !== 'V' && paidBy !== 'K') throw new Error('Paid By must be V or K.');
+  if (paidBy !== 'V' && paidBy !== 'K') throw new Error('Card used must be V or K.');
+  const expenseFor = b.expenseFor === undefined || b.expenseFor === '' ? 'Both' : String(b.expenseFor);
+  if (['Both', 'V', 'K'].indexOf(expenseFor) === -1) throw new Error('Expense for must be Both, V or K.');
   const opt = (v, name) => {
     if (v === '' || v === null || v === undefined) return '';
     const n = Number(v);
@@ -524,6 +607,7 @@ function validateCar_(b) {
     gallons: category === 'Fuel' ? gallons : '',
     pricePerGallon: category === 'Fuel' ? ppg : '',
     notes: safeText_(String(b.notes || '').trim().slice(0, 500)),
+    expenseFor: expenseFor,
   };
 }
 
@@ -547,7 +631,7 @@ function addCar_(sheet, e) {
   let row = 2;
   for (let i = rows.length - 1; i >= 0; i--) if (!isEmptyCarRow_(rows[i])) { row = i + 3; break; }
   sheet.getRange(row, 1, 1, CAR_HEADERS.length).setValues([[e.date, e.category, e.vendor, e.amount, e.paidBy,
-    e.odometer, '', e.rangeLeft, '', e.gallons, e.pricePerGallon, '', '', e.notes, e.id]]);
+    e.odometer, '', e.rangeLeft, '', e.gallons, e.pricePerGallon, '', '', e.notes, e.id, e.expenseFor]]);
 }
 
 function deleteCar_(sheet, id) {
@@ -610,12 +694,18 @@ function recomputeCar_(sheet) {
   return rows;
 }
 
+// Whose car cost this is; blank (rows from before Expense For existed) means shared.
+function carOwner_(r) {
+  const f = String(r[K.FOR] || '').trim().toUpperCase();
+  return f === 'V' || f === 'K' ? f : 'Both';
+}
+
 function carStats_(rows) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const data = rows.filter((r) => !isEmptyCarRow_(r));
   const n = (v) => (v === '' ? 0 : toNumber_(v));
   const s = {
-    v: 0, k: 0, total: 0,
+    v: 0, k: 0, shared: 0, personal: 0, total: 0,
     fills: 0, gallons: 0, fuelSpend: 0, avgPpg: 0,
     mpg: 0, bestMpg: 0, worstMpg: 0, avgMilesPerTank: 0, avgEffRange: 0,
     fuelCpm: 0, totalCpm: 0, milesTracked: 0, lastOdometer: 0,
@@ -629,8 +719,14 @@ function carStats_(rows) {
     const amount = toNumber_(r[K.AMOUNT]);
     const date = formatDate_(r[K.DATE], tz);
     s.total += amount;
-    if (r[K.PAID_BY] === 'V') s.v += amount;
-    if (r[K.PAID_BY] === 'K') s.k += amount;
+    const owner = carOwner_(r);
+    if (owner === 'Both') {
+      s.shared += amount;
+      if (r[K.PAID_BY] === 'V') s.v += amount;
+      if (r[K.PAID_BY] === 'K') s.k += amount;
+    } else {
+      s.personal += personalOwed_(owner, r[K.PAID_BY], amount);
+    }
     s.byCategory[r[K.CATEGORY]] = (s.byCategory[r[K.CATEGORY]] || 0) + amount;
     const month = date.slice(0, 7);
     const m = months[month] || (months[month] = { month: month, fuel: 0, other: 0, total: 0, miles: 0, gallons: 0 });
@@ -673,20 +769,23 @@ function carStats_(rows) {
     return { month: k, fuel: round2_(m.fuel), other: round2_(m.other), total: round2_(m.total), miles: round2_(m.miles),
       mpg: m.gallons ? round2_(m.miles / m.gallons) : '' };
   });
-  ['v', 'k', 'total', 'gallons', 'fuelSpend', 'mpg', 'bestMpg', 'worstMpg', 'avgMilesPerTank', 'avgEffRange', 'milesTracked']
+  ['v', 'k', 'shared', 'personal', 'total', 'gallons', 'fuelSpend', 'mpg', 'bestMpg', 'worstMpg', 'avgMilesPerTank', 'avgEffRange', 'milesTracked']
     .forEach((key) => { s[key] = round2_(s[key]); });
   ['avgPpg', 'fuelCpm', 'totalCpm'].forEach((key) => { s[key] = Math.round(s[key] * 1000) / 1000; });
   Object.keys(s.byCategory).forEach((key) => { s.byCategory[key] = round2_(s.byCategory[key]); });
-  s.split = round2_(s.total / 2);
+  s.split = round2_(s.shared / 2);
   s.vShare = round2_(s.v - s.split);
   s.kShare = round2_(s.k - s.split);
-  s.owedByV = s.vShare < 0 ? round2_(-s.vShare) : 0;
-  s.owedByK = s.kShare < 0 ? round2_(-s.kShare) : 0;
-  s.settle = settleText_(s.vShare, s.kShare);
+  s.personalSettle = settleText_(s.personal, -s.personal);
+  const net = round2_(s.vShare + s.personal); // positive = K owes V
+  s.owedByV = net < 0 ? -net : 0;
+  s.owedByK = net > 0 ? net : 0;
+  s.settle = settleText_(net, -net);
   s.recent = data.slice(-RECENT_COUNT).reverse().map((r) => ({
     id: String(r[K.ID]), date: formatDate_(r[K.DATE], tz), category: String(r[K.CATEGORY]), vendor: String(r[K.VENDOR]),
     amount: toNumber_(r[K.AMOUNT]), paidBy: String(r[K.PAID_BY]), notes: String(r[K.NOTES]),
     odometer: r[K.ODO], miles: r[K.MILES], mpg: r[K.MPG], eff: r[K.EFF], gallons: r[K.GAL], ppg: r[K.PPG],
+    expenseFor: carOwner_(r),
   }));
   return s;
 }
@@ -697,15 +796,15 @@ function writeCarSummary_(sheet, s) {
   const line = (...cells) => cells.concat(new Array(WIDTH - cells.length).fill(''));
   const blank = () => line();
   const out = [
-    line('Who owes whom (car)'),                                        // 1
+    line('Who owes whom (car)', '', 'Shared costs'),                    // 1
     line('V paid', 'K paid', 'Total'),                                  // 2
-    line(s.v, s.k, s.total),                                            // 3
+    line(s.v, s.k, s.shared),                                           // 3
     line("V's share", "K's share", 'Equal split'),                      // 4
     line(s.vShare, s.kShare, s.split),                                  // 5
-    line('Owed by V', 'Owed by K'),                                     // 6
-    line(s.owedByV, s.owedByK),                                         // 7
-    line('Settle up', s.settle),                                        // 8
-    blank(),                                                            // 9
+    line("One person's cost on other's card", s.personalSettle),        // 6
+    line('Owed by V', 'Owed by K'),                                     // 7
+    line(s.owedByV, s.owedByK),                                         // 8
+    line('Settle up', s.settle),                                        // 9
     line('Fuel stats'),                                                 // 10
     line('Average MPG', s.mpg),                                         // 11
     line('Best / worst MPG', s.bestMpg, s.worstMpg),                    // 12
@@ -747,10 +846,10 @@ function writeCarSummary_(sheet, s) {
 
   const cell = (row, col, rows, cols) => sheet.getRange(row, CAR_SUMMARY_COL + col, rows || 1, cols || 1);
   [1, 10, 24].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
-  [2, 4, 6].forEach((row) => cell(row, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6'));
+  [2, 4, 7].forEach((row) => cell(row, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6'));
   cell(40, 0, 1, WIDTH).setFontWeight('bold').setBackground('#f3f4f6');
-  [3, 5, 7].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
-  cell(8, 0, 1, 2).setFontWeight('bold');
+  [3, 5, 8].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
+  [6, 9].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
   [13, 14, 15].forEach((row) => cell(row, 1).setNumberFormat('$0.000'));
   cell(20, 1).setNumberFormat(MONEY);
   cell(25, 1, CAR_CATEGORIES.length + 1, 1).setNumberFormat(MONEY);

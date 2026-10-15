@@ -24,7 +24,7 @@
     <div id="banner" class="banner" role="status" hidden></div>
 
     <div id="mainDash">
-    <section class="card balance-card" aria-labelledby="balanceLabel">
+    <section class="card balance-card" id="jointCard" aria-labelledby="balanceLabel">
       <div id="balanceLabel" class="eyebrow">Monthly budget</div>
       <div class="left-line">
         <span id="balanceAmount" class="balance-amount">—</span>
@@ -47,6 +47,24 @@
       </div>
     </section>
 
+    <section class="card" id="personalBudgetCard" aria-labelledby="pbLabel" hidden>
+      <div id="pbLabel" class="eyebrow">Personal budgets</div>
+      <div class="pb-row" id="pbV">
+        <div class="pb-head"><span class="pb-name">V</span><span class="pb-left"></span></div>
+        <div class="meter" role="progressbar" aria-label="V personal budget used" aria-valuemin="0" aria-valuemax="100"><div class="meter-fill"></div></div>
+        <div class="pb-sub"></div>
+      </div>
+      <div class="pb-row" id="pbK">
+        <div class="pb-head"><span class="pb-name">K</span><span class="pb-left"></span></div>
+        <div class="meter" role="progressbar" aria-label="K personal budget used" aria-valuemin="0" aria-valuemax="100"><div class="meter-fill"></div></div>
+        <div class="pb-sub"></div>
+      </div>
+      <div id="pbNote" class="muted pb-note"></div>
+      <div class="row">
+        <button type="button" id="setPersonalBtn" class="full">Set personal budget</button>
+      </div>
+    </section>
+
     <section class="card" id="splitCard" aria-labelledby="splitLabel" hidden>
       <div class="section-head">
         <h2 id="splitLabel">Who owes whom</h2>
@@ -61,8 +79,9 @@
         </tbody>
       </table>
       <div id="settleLine" class="settle"></div>
+      <div id="personalLine" class="overall" hidden></div>
       <div id="overallLine" class="overall" hidden></div>
-      <div class="muted">Joint expenses only. Share = what each paid minus half the total.</div>
+      <div class="muted">Share = what each paid minus half the joint total. A personal expense on the other person's card is owed in full.</div>
     </section>
 
     <section class="card fixed-card" id="fixedCard" aria-labelledby="fixedLabel" hidden>
@@ -118,8 +137,9 @@
             <tr><td id="carOwedV"></td><td id="carOwedK"></td><td></td></tr>
           </tbody>
         </table>
+        <div id="carPersonal" class="overall" hidden></div>
         <div id="carSettle" class="settle"></div>
-        <div class="muted">Separate from the monthly budget and split. Share = what each paid minus half the total.</div>
+        <div class="muted">Separate from the monthly budget and split. Shared costs: share = what each paid minus half. One person's cost on the other's card is owed in full.</div>
       </section>
 
       <section class="card" aria-labelledby="carCatLabel2">
@@ -204,12 +224,18 @@
         </div>
       </label>
 
-      <label>Paid By
-        <select id="paidBy" required>
-          <option value="V">V</option>
-          <option value="K">K</option>
-        </select>
-      </label>
+      <div id="payGrid" class="grid2">
+        <label id="forField">Expense for
+          <select id="expenseFor"></select>
+        </label>
+        <label>Card used
+          <select id="paidBy" required>
+            <option value="V">V's card</option>
+            <option value="K">K's card</option>
+          </select>
+        </label>
+      </div>
+      <div id="owedHint" class="fuel-preview" hidden></div>
 
       <label>Notes
         <input type="text" id="notes" placeholder="Milk, bananas, gas…" autocapitalize="sentences">
@@ -225,6 +251,7 @@
       </div>
       <ul id="recentList" class="recent"></ul>
     </section>
+    <p id="appVersion" class="app-version"></p>
   </main>
 
   <dialog id="fundsDialog">
@@ -242,6 +269,34 @@
       </label>
       <label>Notes
         <input type="text" id="fundsNotes" placeholder="October budget" autocapitalize="sentences">
+      </label>
+      <div class="row end">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="personalDialog">
+    <form method="dialog" id="personalForm" novalidate>
+      <h2>Set personal budget</h2>
+      <p class="muted">Each person's Personal expenses come out of their own budget, whoever's card paid. Leave a box empty to keep that person's current budget.</p>
+      <div class="grid2">
+        <label>V's budget ($)
+          <div class="amount">
+            <span>$</span>
+            <input type="text" id="pbAmountV" inputmode="decimal" placeholder="200.00">
+          </div>
+        </label>
+        <label>K's budget ($)
+          <div class="amount">
+            <span>$</span>
+            <input type="text" id="pbAmountK" inputmode="decimal" placeholder="200.00">
+          </div>
+        </label>
+      </div>
+      <label>Start date
+        <input type="date" id="pbDate" required>
       </label>
       <div class="row end">
         <button value="cancel" formnovalidate>Cancel</button>

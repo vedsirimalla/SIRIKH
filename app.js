@@ -2,27 +2,35 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
+  const APP_VERSION = 11; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
-  const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set' };
+  const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set' };
   const TYPE_HINTS = {
     Joint: 'Joint: shared day-to-day spending. Comes out of the monthly budget and counts in who owes whom.',
     Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
-    Personal: 'Personal: only for the person who paid. Not in the budget or who owes whom.',
-    Car: 'Sonata: car costs and fuel, saved to the Sonata tab. Has its own split; not in the monthly budget.',
+    Personal: "Personal: one person's own expense, not in the budget. If it goes on the other person's card, they are owed the full amount.",
+    Car: "Sonata: car costs and fuel, saved to the Sonata tab with its own split. Shared costs split 50/50; one person's cost on the other's card is owed in full.",
   };
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
   function colorClass(r) {
-    if (r.type === 'Personal') return r.paidBy === 'K' ? 'c-personal-k' : 'c-personal-v';
+    if (r.type === 'Personal') return (r.expenseFor || r.paidBy) === 'K' ? 'c-personal-k' : 'c-personal-v';
     if (r.type === 'Fixed') return r.paidBy === 'K' ? 'c-fixed-k' : 'c-fixed-v';
     return '';
   }
 
   // Older copies of Code.gs save unknown types as Joint, so Fixed bills wait on the phone until
   // the sheet's script is redeployed with at least this version.
-  // Fixed bills need version 7 (older scripts save them as Joint); Sonata entries need version 8.
-  const requiredVersion = (op) => (op.table === 'car' ? 8 : op.op === 'add' && op.entry.type === 'Fixed' ? 7 : 0);
+  // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
+  // expenses need version 9, which stores whose expense it is separately from whose card paid.
+  const requiredVersion = (op) => {
+    if (op.table === 'car') return 9;
+    if (op.op !== 'add') return 0;
+    if (op.entry.type === 'Personal budget') return 10;
+    if (op.entry.type === 'Personal') return 9;
+    return op.entry.type === 'Fixed' ? 7 : 0;
+  };
   const OUTDATED_MESSAGE = 'Some entries are waiting on this phone (hourglass) because the Apps Script in your sheet ' +
     'is an older version. In Apps Script: paste the latest Code.gs, then ' +
     'Deploy > Manage deployments > pencil > Version: New version > Deploy. They will send automatically.';
@@ -100,12 +108,19 @@
 
   const signed = (n) => (n > 0 ? '+' : '') + money(n);
 
+  // A one-person expense paid on the other person's card is owed back in full. Positive = K owes V.
+  function owedInFull(owner, card, amount) {
+    if (owner === 'K' && card === 'V') return amount;
+    if (owner === 'V' && card === 'K') return -amount;
+    return 0;
+  }
+
   // Starts from what the sheet last reported and applies changes not synced yet,
   // so the budget and the split update the moment an expense is saved, even offline.
   function estimate() {
     const state = getState();
     const recent = state ? state.recent || [] : [];
-    const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, ...(state && state.period) };
+    const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, ...(state && state.period) };
     let balance = state ? Number(state.balance) || 0 : 0;
     let hasBalance = state ? !!state.hasBalance : false;
 
@@ -123,6 +138,7 @@
         if (e.paidBy === 'V') p.fv += amt;
         if (e.paidBy === 'K') p.fk += amt;
       }
+      if (e.type === 'Personal') p.personal += owedInFull(e.expenseFor || e.paidBy, e.paidBy, amt);
     };
 
     const queue = getQueue();
@@ -130,7 +146,7 @@
       if (op.op === 'add' && op.entry.type === 'Set balance') {
         balance = op.entry.amount;
         hasBalance = true;
-        Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0 });
+        Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0 });
       } else if (op.op === 'add' && op.table !== 'car') {
         apply(op.entry, 1);
       } else {
@@ -138,7 +154,7 @@
         if (e) apply(e, -1);
       }
     }
-    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk']) p[k] = round2(p[k]);
+    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'personal']) p[k] = round2(p[k]);
     return { balance: round2(balance), hasBalance, unsynced: queue.length, period: p };
   }
 
@@ -210,14 +226,18 @@
     const fvShare = round2(p.fv - fSplit);
     const fkShare = round2(p.fk - fSplit);
     const hasFixed = p.fixed !== 0 || p.fv !== 0 || p.fk !== 0;
+    const pn = round2(p.personal || 0);
     $('fixedCard').hidden = !hasFixed;
-    $('overallLine').hidden = !hasFixed;
+    $('personalLine').hidden = Math.abs(pn) < 0.01;
+    $('personalLine').textContent = "Personal on the other's card: " + settleText(pn, -pn);
+    $('overallLine').hidden = !hasFixed && Math.abs(pn) < 0.01;
+    $('overallLine').textContent = (hasFixed ? 'Overall with fixed bills and personal: ' : 'Overall with personal: ') +
+      settleText(round2(vShare + fvShare + pn), round2(kShare + fkShare - pn));
     if (!hasFixed) return;
     $('fixedV').textContent = money(p.fv);
     $('fixedK').textContent = money(p.fk);
     $('fixedTotal').textContent = money(p.fixed);
     $('fixedSettle').textContent = settleText(fvShare, fkShare);
-    $('overallLine').textContent = 'Including fixed bills: ' + settleText(round2(vShare + fvShare), round2(kShare + fkShare));
   }
 
   function settleText(vShare, kShare) {
@@ -265,7 +285,11 @@
       const tag = document.createElement('span');
       tag.className = 'tag';
       tag.textContent = isCar ? r.category : TYPE_LABELS[r.type] || r.type || 'Joint';
-      const parts = [prettyDate(r.date), r.paidBy ? 'by ' + r.paidBy : ''];
+      const owner = r.expenseFor && r.expenseFor !== 'Both' ? r.expenseFor : '';
+      const parts = [prettyDate(r.date)];
+      if (owner && (r.type === 'Personal' || isCar)) parts.push(`for ${owner}`);
+      if (r.paidBy === 'V' || r.paidBy === 'K') parts.push(`${r.paidBy}'s card`);
+      else if (r.paidBy) parts.push(`by ${r.paidBy}`);
       if (isCar && r.category === 'Fuel') {
         if (r.miles !== undefined && r.miles !== '') parts.push(`${num(r.miles)} mi`);
         if (r.mpg !== undefined && r.mpg !== '') parts.push(`${Number(r.mpg).toFixed(1)} MPG`);
@@ -293,14 +317,119 @@
     $('syncNote').textContent = n ? `${n} waiting to sync` : '';
   }
 
+  // Each type shows its own budget: Joint the joint monthly budget, Personal the two personal
+  // budgets, Fixed and Sonata none (bills get paid regardless; the car has its own stats).
   function render() {
-    const isCar = isCarMode();
+    const type = selectedType();
+    const isCar = type === 'Car';
     $('mainDash').hidden = isCar;
     $('carDash').hidden = !isCar;
     renderBalance();
+    renderPersonalBudgets();
+    $('jointCard').hidden = type !== 'Joint';
+    $('personalBudgetCard').hidden = type !== 'Personal';
+    if (type === 'Fixed') $('fixedCard').hidden = false;
+    if (type === 'Personal') $('fixedCard').hidden = true;
     if (isCar) renderCar();
     renderRecent();
   }
+
+  // ---------- Personal budgets
+  // What the sheet reported, plus changes not synced yet.
+  function estimatePersonal() {
+    const st = getState();
+    const recent = st ? st.recent || [] : [];
+    const pb = { V: null, K: null };
+    for (const who of ['V', 'K']) {
+      const b = st && st.personalBudgets && st.personalBudgets[who];
+      if (b) pb[who] = { since: b.since, budget: b.budget, spent: b.spent };
+    }
+    for (const op of getQueue()) {
+      if (op.table === 'car') continue;
+      if (op.op === 'add' && op.entry.type === 'Personal budget') {
+        pb[op.entry.expenseFor] = { since: op.entry.date, budget: op.entry.amount, spent: 0 };
+      } else if (op.op === 'add' && op.entry.type === 'Personal') {
+        const b = pb[op.entry.expenseFor || op.entry.paidBy];
+        if (b) b.spent += op.entry.amount;
+      } else if (op.op === 'delete') {
+        const e = recent.find((r) => r.id === op.id && r.type === 'Personal');
+        const b = e && pb[e.expenseFor || e.paidBy];
+        if (b) b.spent -= e.amount;
+      }
+    }
+    for (const who of ['V', 'K']) {
+      const b = pb[who];
+      if (!b) continue;
+      b.spent = round2(b.spent);
+      b.remaining = round2(b.budget - b.spent);
+    }
+    return pb;
+  }
+
+  function renderPersonalBudgets() {
+    const pb = estimatePersonal();
+    for (const who of ['V', 'K']) {
+      const row = $('pb' + who);
+      const b = pb[who];
+      const left = row.querySelector('.pb-left');
+      const fill = row.querySelector('.meter-fill');
+      const sub = row.querySelector('.pb-sub');
+      if (!b) {
+        left.textContent = 'Not set';
+        left.className = 'pb-left unset';
+        fill.style.width = '0%';
+        sub.textContent = 'No personal budget yet.';
+        continue;
+      }
+      const used = b.budget > 0 ? Math.min(100, Math.max(0, (b.spent / b.budget) * 100)) : b.spent > 0 ? 100 : 0;
+      left.textContent = b.remaining < 0 ? `${money(-b.remaining)} over` : `${money(b.remaining)} left`;
+      left.className = 'pb-left' + (b.remaining < 0 ? ' neg' : '');
+      fill.style.width = used + '%';
+      fill.className = 'meter-fill' + (b.remaining < 0 ? ' over' : used >= 80 ? ' warn' : '');
+      row.querySelector('.meter').setAttribute('aria-valuenow', String(Math.round(used)));
+      let text = `Spent ${money(b.spent)} of ${money(b.budget)} since ${prettyDate(b.since)}`;
+      if (b.since.slice(0, 7) === today().slice(0, 7) && b.remaining > 0) {
+        text += ` · about ${money(b.remaining / daysLeftInMonth())} a day`;
+      } else if (b.since.slice(0, 7) !== today().slice(0, 7)) {
+        text += ` · set a new one for ${monthName(today())}`;
+      }
+      sub.textContent = text;
+    }
+    $('pbNote').textContent = pb.V || pb.K ? '' : "Set a monthly personal budget for V, K or both. Each person's Personal expenses come out of their own budget.";
+  }
+
+  const personalDialog = $('personalDialog');
+  $('setPersonalBtn').addEventListener('click', () => {
+    $('personalForm').reset();
+    clearInvalid($('personalForm'));
+    $('pbDate').value = today();
+    personalDialog.showModal();
+    $('pbAmountV').focus();
+  });
+
+  $('personalForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (e.submitter && e.submitter.value === 'cancel') return personalDialog.close();
+    const date = $('pbDate').value;
+    if (!date) return $('pbDate').classList.add('invalid');
+    const entries = [];
+    for (const who of ['V', 'K']) {
+      const input = $('pbAmount' + who);
+      if (!input.value.trim()) continue;
+      const amount = parseAmount(input.value);
+      if (amount === null || amount <= 0) return input.classList.add('invalid');
+      entries.push({ id: uuid(), date, category: '', amount, paidBy: who, expenseFor: who, notes: '', type: 'Personal budget' });
+    }
+    if (!entries.length) {
+      $('pbAmountV').classList.add('invalid');
+      $('pbAmountK').classList.add('invalid');
+      return;
+    }
+    personalDialog.close();
+    entries.forEach((entry) => enqueue({ op: 'add', entry }));
+    const status = await sync();
+    report(status, 'Personal budget set ✓ ' + entries.map((x) => `${x.expenseFor} ${money(x.amount)}`).join(', '));
+  });
 
   // ---------- Sonata (car)
   const num = (n, digits = 0) => Number(n).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -338,16 +467,24 @@
         (c.fills ? `. ${c.fills} fill-ups, ${money(c.fuelSpend)} on fuel.` : '')
       : 'No fill-ups yet. Pick Fuel below to log one.';
 
-    // Split: what the sheet reported plus car entries not synced yet.
+    // Split: what the sheet reported plus car entries not synced yet. Shared costs split 50/50;
+    // a one-person cost on the other's card is owed in full.
     let v = c ? c.v : 0;
     let k = c ? c.k : 0;
+    let personal = c ? c.personal || 0 : 0;
     for (const op of getQueue()) {
       if (op.table !== 'car' || op.op !== 'add') continue;
-      if (op.entry.paidBy === 'V') v += op.entry.amount;
-      if (op.entry.paidBy === 'K') k += op.entry.amount;
+      const e = op.entry;
+      if (e.expenseFor === 'V' || e.expenseFor === 'K') {
+        personal += owedInFull(e.expenseFor, e.paidBy, e.amount);
+        continue;
+      }
+      if (e.paidBy === 'V') v += e.amount;
+      if (e.paidBy === 'K') k += e.amount;
     }
     v = round2(v);
     k = round2(k);
+    personal = round2(personal);
     const total = round2(v + k);
     const split = round2(total / 2);
     const vShare = round2(v - split);
@@ -360,9 +497,12 @@
       $(id).textContent = signed(n);
       $(id).className = n >= 0.01 ? 'pos' : n <= -0.01 ? 'neg' : '';
     }
-    $('carOwedV').textContent = money(vShare < 0 ? -vShare : 0);
-    $('carOwedK').textContent = money(kShare < 0 ? -kShare : 0);
-    $('carSettle').textContent = settleText(vShare, kShare);
+    const net = round2(vShare + personal);
+    $('carPersonal').hidden = Math.abs(personal) < 0.01;
+    $('carPersonal').textContent = "One person's cost on the other's card: " + settleText(personal, -personal);
+    $('carOwedV').textContent = money(net < 0 ? -net : 0);
+    $('carOwedK').textContent = money(net > 0 ? net : 0);
+    $('carSettle').textContent = settleText(net, -net);
 
     const cats = $('carCategories');
     cats.innerHTML = '';
@@ -515,6 +655,7 @@
       recent: data.recent || [],
       version: data.version || 0,
       car: data.car || null,
+      personalBudgets: data.personalBudgets || null,
     });
     store.set('syncedAt', Date.now());
   }
@@ -609,9 +750,56 @@
     $('carFields').hidden = !car;
     $('categoryLabel').textContent = fixed ? 'Fixed bill' : 'Category';
     $('saveBtn').textContent = car ? 'Save car expense' : 'Save expense';
+    setupExpenseFor(type);
     updateCarFields();
-    if (car !== !$('carDash').hidden) render();
+    render();
   }
+
+  // Whose expense it is: only asked for Personal (V or K) and Sonata (shared, V or K).
+  const FOR_OPTIONS = {
+    Personal: [['V', 'V'], ['K', 'K']],
+    Car: [['Both', 'Shared'], ['V', 'V'], ['K', 'K']],
+  };
+  function setupExpenseFor(type) {
+    const options = FOR_OPTIONS[type];
+    $('forField').hidden = !options;
+    $('payGrid').classList.toggle('grid2', !!options);
+    if (options) {
+      const select = $('expenseFor');
+      const keep = store.get('for.' + type, options[0][0]);
+      select.innerHTML = '';
+      for (const [value, label] of options) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        select.appendChild(opt);
+      }
+      select.value = options.some(([v]) => v === keep) ? keep : options[0][0];
+    }
+    updateOwedHint();
+  }
+
+  function selectedFor() {
+    return $('forField').hidden ? '' : $('expenseFor').value;
+  }
+
+  // "K owes V the full $20.00" when one person's expense goes on the other's card.
+  function updateOwedHint() {
+    const owner = selectedFor();
+    const card = $('paidBy').value;
+    const hint = $('owedHint');
+    if ((owner !== 'V' && owner !== 'K') || owner === card) { hint.hidden = true; return; }
+    const amount = parseAmount($('amount').value);
+    hint.textContent = `${owner}'s expense on ${card}'s card: ${owner} owes ${card} the full ` +
+      (amount ? money(amount) : 'amount') + '.';
+    hint.hidden = false;
+  }
+  $('expenseFor').addEventListener('change', () => {
+    store.set('for.' + selectedType(), $('expenseFor').value);
+    updateOwedHint();
+  });
+  $('paidBy').addEventListener('change', updateOwedHint);
+  $('amount').addEventListener('input', updateOwedHint);
 
   function selectedCarCat() {
     const checked = document.querySelector('input[name="carCat"]:checked');
@@ -634,7 +822,7 @@
     if (!isCarMode() || selectedCarCat() !== 'Fuel') { preview.hidden = true; return; }
     const gal = parseAmount($('gallons').value);
     const price = parseAmount($('ppg').value);
-    if (!amountTyped && gal && price) $('amount').value = (Math.round(gal * price * 100) / 100).toFixed(2);
+    if (!amountTyped && gal && price) { $('amount').value = (Math.round(gal * price * 100) / 100).toFixed(2); updateOwedHint(); }
     const odo = parseAmount($('odometer').value);
     const range = parseAmount($('rangeLeft').value);
     const last = lastOdometer();
@@ -672,7 +860,7 @@
     input.focus();
     showBanner(message, 'err');
   }
-  for (const id of ['date', 'category', 'amount', 'odometer', 'fundsAmount', 'fundsDate', 'scriptUrl', 'secretKey']) {
+  for (const id of ['date', 'category', 'amount', 'odometer', 'fundsAmount', 'fundsDate', 'pbAmountV', 'pbAmountK', 'pbDate', 'scriptUrl', 'secretKey']) {
     $(id).addEventListener('input', () => $(id).classList.remove('invalid'));
   }
 
@@ -701,6 +889,7 @@
     const entry = {
       id: uuid(), date, category, vendor: $('vendor').value.trim(), amount, paidBy: $('paidBy').value,
       notes: $('notes').value.trim(), odometer, rangeLeft, gallons, pricePerGallon: ppg,
+      expenseFor: selectedFor() || 'Both',
     };
     enqueue({ op: 'add', table: 'car', entry });
     store.set('paidBy', entry.paidBy);
@@ -716,8 +905,10 @@
     $('saveBtn').disabled = true;
     const status = await sync();
     $('saveBtn').disabled = false;
+    const owes = owedInFull(entry.expenseFor, entry.paidBy, amount);
     report(status, `Saved ✓ ${category} ${money(amount)}` +
-      (miles > 0 && gallons ? ` · ${(miles / gallons).toFixed(1)} MPG` : ''));
+      (miles > 0 && gallons ? ` · ${(miles / gallons).toFixed(1)} MPG` : '') +
+      (owes ? ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}` : ''));
   }
 
   $('expenseForm').addEventListener('submit', async (e) => {
@@ -746,6 +937,7 @@
       paidBy: $('paidBy').value,
       notes: $('notes').value.trim(),
       type,
+      expenseFor: type === 'Personal' ? selectedFor() : '',
     };
     enqueue({ op: 'add', entry });
     store.set('paidBy', entry.paidBy);
@@ -761,8 +953,12 @@
     const status = await sync();
     $('saveBtn').disabled = false;
     const left = estimate();
+    const owes = owedInFull(entry.expenseFor, entry.paidBy, amount);
+    const pb = entry.type === 'Personal' ? estimatePersonal()[entry.expenseFor] : null;
     report(status, `Saved ✓ ${category} ${money(amount)}` +
       (entry.type === 'Fixed' ? ' · Fixed bill' : '') +
+      (pb ? ` · ${entry.expenseFor} personal: ${pb.remaining < 0 ? money(-pb.remaining) + ' over' : money(pb.remaining) + ' left'}` : '') +
+      (owes ? ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}` : '') +
       (entry.type === 'Joint' && left.hasBalance
         ? left.balance < 0 ? ` · ${money(-left.balance)} over budget` : ` · ${money(left.balance)} left`
         : ''));
@@ -875,7 +1071,19 @@
     // The app can stay open in the background for days; keep the date on today if nothing is typed yet.
     if (!$('category').value && !$('amount').value) $('date').value = today();
     if (getSettings()) sync();
+    if (swReg) swReg.update().catch(() => {});
   });
 
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Updates: check for a new version on every open, and reload once when it takes over,
+  // so a home-screen app that stays open in the background still picks up new files.
+  let swReg = null;
+  $('appVersion').textContent = `Sirikh app v${APP_VERSION}`;
+  if ('serviceWorker' in navigator) {
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController && !reloading) { reloading = true; location.reload(); }
+    });
+    navigator.serviceWorker.register('sw.js').then((reg) => { swReg = reg; reg.update().catch(() => {}); }).catch(() => {});
+  }
 })();
