@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 15; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 16; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set' };
@@ -25,7 +25,7 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
-    if (op.table === 'car') return op.op === 'add' ? 12 : 9;
+    if (op.table === 'car') return op.op === 'add' ? 15 : 9;
     if (op.op !== 'add') return 0;
     if (op.entry.type === 'Personal budget') return 10;
     if (op.entry.type === 'Personal') return 9;
@@ -307,6 +307,8 @@
       if (r.paidBy === 'V' || r.paidBy === 'K') parts.push(`${r.paidBy}'s card`);
       else if (r.paidBy) parts.push(`by ${r.paidBy}`);
       if (isCar && r.category === 'Fuel') {
+        if (r.fill === 'Partial') parts.push('partial');
+        if (r.missedBefore) parts.push('after missed fill-up');
         if (r.miles !== undefined && r.miles !== '') parts.push(`${num(r.miles)} mi`);
         if (r.mpg !== undefined && r.mpg !== '') parts.push(`${Number(r.mpg).toFixed(1)} MPG`);
         if (r.gallons !== undefined && r.gallons !== '') parts.push(`${r.gallons} gal`);
@@ -466,11 +468,37 @@
     return odo;
   }
 
+  const TANK_GALLONS = 13.2; // 2026 Sonata Hybrid
+
+  // The stretch since the last Full fill: where it started and the gallons and dollars added since.
+  // The next Full fill closes it: MPG = stretch miles / all those gallons (partials included).
+  function openStretch() {
+    const st = getState();
+    const base = st && st.car && st.car.open;
+    let open = base ? { ...base } : null;
+    for (const op of getQueue()) {
+      if (op.table !== 'car' || op.op !== 'add' || op.entry.category !== 'Fuel' || op.entry.odometer === '') continue;
+      const e = op.entry;
+      const g = e.gallons ? e.gallons : e.pricePerGallon ? e.amount / e.pricePerGallon : null;
+      if (e.missedBefore) open = null;
+      if (e.fill === 'Partial') {
+        if (open) { open.gallons += g || 0; open.amount += e.amount; open.known = open.known && g !== null; }
+      } else {
+        open = { startOdo: Number(e.odometer), gallons: 0, amount: 0, known: true };
+      }
+    }
+    return open;
+  }
+
   function renderCar() {
     const st = getState();
     const c = (st && st.car) || null;
     const dash = (v, f) => (c && v ? f(v) : '—');
     $('carMpg').textContent = dash(c && c.mpg, (v) => Number(v).toFixed(1));
+    $('carRolling').textContent = c && c.rollingMpg
+      ? `Rolling MPG (last 5 fills): ${Number(c.rollingMpg).toFixed(1)}` +
+        (c.partials || c.missed ? ` · ${c.partials} partial, ${c.missed} missed fill-up${c.missed === 1 ? '' : 's'} handled` : '')
+      : 'Overall MPG counts full-to-full tanks; partial fills roll into the next full one.';
     $('carPpg').textContent = dash(c && c.avgPpg, per);
     $('carFuelCpm').textContent = dash(c && c.fuelCpm, per);
     $('carTotalCpm').textContent = dash(c && c.totalCpm, per);
@@ -480,8 +508,9 @@
     const lf = c && c.lastFill;
     $('carLastFill').textContent = lf
       ? `Last fill-up ${prettyDate(lf.date)} at ${num(lf.odometer)} mi` +
-        (lf.miles !== '' ? `: ${num(lf.miles)} mi, ` : '') +
-        (lf.mpg !== '' ? `${Number(lf.mpg).toFixed(1)} MPG` : '') +
+        (lf.partial ? ' (partial; its MPG comes with the next full fill)' : '') +
+        (lf.miles !== '' ? `: ${num(lf.miles)} mi` : '') +
+        (lf.mpg !== '' ? `, ${Number(lf.mpg).toFixed(1)} MPG for that tank` : '') +
         (lf.eff !== '' ? `, effective range ${num(lf.eff)} mi` : '') +
         (c.fills ? `. ${c.fills} fill-ups, ${money(c.fuelSpend)} on fuel.` : '')
       : 'No fill-ups yet. Pick Fuel below to log one.';
@@ -530,18 +559,28 @@
 
     const charts = $('carCharts');
     charts.innerHTML = '';
-    const series = (c && c.series) || [];
+    const tanks = (c && c.stretches) || [];
+    const fills = (c && c.fills_log) || [];
     const monthly = (c && c.monthly) || [];
-    if (series.length < 2 && monthly.length < 1) {
-      charts.textContent = 'Charts appear after two fill-ups with odometer and gallons.';
+    const rolling = fills.filter((f) => f.rolling !== '');
+    const prices = fills.filter((f) => f.ppg !== '');
+    if (tanks.length < 2 && prices.length < 2 && monthly.length < 1) {
+      charts.textContent = 'Charts appear after a few fill-ups with odometer and gallons.';
       charts.className = 'muted';
       return;
     }
     charts.className = 'charts';
-    if (series.length >= 2) {
-      charts.appendChild(lineChart('MPG per fill-up', series.map((p) => ({ x: p.date, y: p.mpg })), (y) => y.toFixed(1)));
-      charts.appendChild(lineChart('Price per gallon', series.filter((p) => p.ppg).map((p) => ({ x: p.date, y: p.ppg })), (y) => '$' + y.toFixed(2)));
-      charts.appendChild(lineChart('Fuel cost per mile', series.filter((p) => p.cpm).map((p) => ({ x: p.date, y: p.cpm })), (y) => '$' + y.toFixed(3)));
+    if (tanks.length >= 2) {
+      charts.appendChild(lineChart('MPG per full tank (full-to-full)', tanks.map((p) => ({ x: p.date, y: p.mpg })), (y) => y.toFixed(1)));
+    }
+    if (rolling.length >= 2) {
+      charts.appendChild(lineChart('Rolling MPG (last 5 fills)', rolling.map((p) => ({ x: p.date, y: p.rolling })), (y) => y.toFixed(1)));
+    }
+    if (prices.length >= 2) {
+      charts.appendChild(lineChart('Price per gallon (every fill)', prices.map((p) => ({ x: p.date, y: p.ppg })), (y) => '$' + y.toFixed(2)));
+    }
+    if (tanks.length >= 2) {
+      charts.appendChild(lineChart('Fuel cost per mile', tanks.filter((p) => p.cpm).map((p) => ({ x: p.date, y: p.cpm })), (y) => '$' + y.toFixed(3)));
     }
     if (monthly.length) {
       charts.appendChild(barChart('Car spend per month', monthly.map((m) => ({ x: m.month, y: m.total }))));
@@ -843,23 +882,53 @@
     if (!amountTyped && gal && price) { $('amount').value = (Math.round(gal * price * 100) / 100).toFixed(2); updateOwedHint(); }
     const odo = parseAmount($('odometer').value);
     const range = parseAmount($('rangeLeft').value);
+    const amt = parseAmount($('amount').value);
+    const partial = $('fillPartial').checked;
+    const missed = $('missedBefore').checked;
     const last = lastOdometer();
+    const open = openStretch();
+    const st = getState();
+    const overall = st && st.car && st.car.mpg ? Number(st.car.mpg) : 0;
     const parts = [];
-    if (odo && last && odo > last) {
-      const miles = round2(odo - last);
-      parts.push(`${num(miles)} mi since last fill-up`);
-      if (gal) parts.push(`${(miles / gal).toFixed(1)} MPG`);
-      if (range !== null) parts.push(`effective range ${num(miles + range)} mi`);
-      const amt = parseAmount($('amount').value);
-      if (amt) parts.push(`${per(amt / miles)}/mi`);
+    let warn = false;
+    if (gal && gal > TANK_GALLONS + 0.2) {
+      parts.push(`${gal} gal is more than the ${TANK_GALLONS} gal tank holds. Check the number.`);
+      warn = true;
     } else if (odo && last && odo <= last) {
       parts.push(`Odometer should be above the last fill-up (${num(last)} mi).`);
+      warn = true;
+    } else if (odo && last) {
+      parts.push(`${num(round2(odo - last))} mi since last fill-up`);
+      // A fill that leaves the tank well short of 13.2 gal was probably partial.
+      const inTank = gal && range !== null && overall ? gal + range / overall : 0;
+      const looksPartial = !partial && !missed && inTank && inTank < TANK_GALLONS * 0.85;
+      if (looksPartial) {
+        parts.push(`looks partial: ${gal} gal + about ${(range / overall).toFixed(1)} gal left = ${inTank.toFixed(1)} of ${TANK_GALLONS} gal. Tap Partial if you stopped early`);
+        warn = true;
+      }
+      if (missed) {
+        parts.push('missed fill-up: no MPG for this stretch; tracking restarts here');
+      } else if (partial) {
+        parts.push('partial fill: its gallons count toward the next full fill\'s MPG');
+      } else if (open && open.known && gal) {
+        const miles = round2(odo - open.startOdo);
+        const g = open.gallons + gal;
+        parts.push((looksPartial ? 'if it really was full: ' : '') + `${(miles / g).toFixed(1)} MPG` +
+          (open.gallons ? ` (full-to-full: ${num(miles)} mi ÷ ${g.toFixed(2)} gal incl. partials)` : ''));
+        if (amt) parts.push(`${per((open.amount + amt) / miles)}/mi`);
+        if (range !== null && !open.gallons) parts.push(`effective range ${num(round2(odo - last) + range)} mi`);
+      } else if (!open) {
+        parts.push('MPG starts with the next full fill');
+      }
     } else if (last) {
       parts.push(`Last fill-up odometer: ${num(last)} mi.`);
     }
     preview.textContent = parts.join(' · ');
+    preview.classList.toggle('warn', warn);
     preview.hidden = !parts.length;
   }
+  $('fillSeg').addEventListener('change', updateFuelPreview);
+  $('missedBefore').addEventListener('change', updateFuelPreview);
   $('carPicker').addEventListener('change', updateCarFields);
   for (const id of ['odometer', 'rangeLeft', 'gallons', 'ppg']) $(id).addEventListener('input', updateFuelPreview);
   $('amount').addEventListener('input', () => { amountTyped = $('amount').value.trim() !== ''; updateFuelPreview(); });
@@ -896,6 +965,9 @@
     for (const [id, v, label] of [['odometer', odometer, 'odometer'], ['rangeLeft', rangeLeft, 'range left'], ['gallons', gallons, 'gallons'], ['ppg', ppg, 'price per gallon']]) {
       if (v === null || (v !== '' && v < 0)) return markInvalid($(id), `Enter a valid ${label}.`);
     }
+    if (fuel && gallons && gallons > TANK_GALLONS + 0.2) {
+      return markInvalid($('gallons'), `That is more than the ${TANK_GALLONS} gal tank holds.`);
+    }
     const last = lastOdometer();
     if (fuel && odometer !== '' && last && odometer <= last) {
       return markInvalid($('odometer'), `Odometer should be above the last fill-up (${num(last)} mi).`);
@@ -903,11 +975,19 @@
     let amount = parseAmount($('amount').value);
     if ((amount === null || amount === 0) && gallons && ppg) amount = round2(gallons * ppg);
     if (amount === null || amount === 0) return markInvalid($('amount'), 'Enter the amount.');
-    const miles = fuel && odometer !== '' && last ? round2(odometer - last) : 0;
+    const partial = fuel && $('fillPartial').checked;
+    const missedBefore = fuel && $('missedBefore').checked;
+    const open = openStretch();
+    let tankMpg = 0;
+    if (fuel && !partial && !missedBefore && open && open.known && odometer !== '' && gallons) {
+      tankMpg = (odometer - open.startOdo) / (open.gallons + gallons);
+    }
     const entry = {
       id: uuid(), date, category, vendor: $('vendor').value.trim(), amount, paidBy: $('paidBy').value,
       notes: $('notes').value.trim(), odometer, rangeLeft, gallons, pricePerGallon: ppg,
       expenseFor: selectedFor() || $('paidBy').value,
+      fill: fuel ? (partial ? 'Partial' : 'Full') : '',
+      missedBefore,
     };
     enqueue({ op: 'add', table: 'car', entry });
     store.set('paidBy', entry.paidBy);
@@ -925,7 +1005,7 @@
     $('saveBtn').disabled = false;
     const owes = round2(carOwed(entry.expenseFor, entry.paidBy, amount));
     report(status, `Saved ✓ ${category} ${money(amount)}` +
-      (miles > 0 && gallons ? ` · ${(miles / gallons).toFixed(1)} MPG` : '') +
+      (partial ? ' · partial, MPG comes with the next full fill' : tankMpg > 0 ? ` · ${tankMpg.toFixed(1)} MPG` : '') +
       (owes ? ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}` : ''));
   }
 

@@ -226,6 +226,10 @@ input.invalid { border-color: var(--err); }
 .seg input:checked + label { background: var(--accent); color: var(--accent-text); }
 .seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 1px; }
 .hint { margin-top: 6px; }
+.seg.two { grid-template-columns: 1fr 1fr; }
+label.check { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 500; color: var(--text); margin-bottom: 14px; }
+label.check input { width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; flex: none; -webkit-appearance: checkbox; appearance: auto; accent-color: var(--accent); }
+.fuel-preview.warn { border-color: var(--warn); }
 
 /* Buttons */
 button {

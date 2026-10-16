@@ -38,7 +38,7 @@
 
 const TAB_NAME = 'Sirikh';
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 14;
+const BACKEND_VERSION = 15;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Balance ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget'];
@@ -509,34 +509,46 @@ function formatDate_(v, tz) {
 // Sonata: car expenses and fuel tracking, kept in its own tab and table.
 //
 //   Date | Category | Station / Vendor | Amount ($) | Card Used | Odometer | Miles Driven |
-//   Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID | Expense For
+//   Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID |
+//   Expense For | Fill | Missed Before
 //
 // Expense For says whose turn or cost it is: V, K or Joint (blank = the card owner's own turn).
 // V and K take turns (V three tanks, K the fourth), so their own turns create nothing owed.
 //   Joint (a trip fill-up, a shared repair): split 50/50, the other person owes half to the card owner.
 //   A turn paid on the other person's card: owed back in full.
 //
-// Calculated by this script for Fuel rows (ordered by odometer):
-//   Miles Driven    = this odometer - previous fill-up's odometer
-//   Effective Range = Miles Driven + Range Left (how far that tank would have gone)
-//   MPG             = Miles Driven / Gallons of this fill-up
-//   Cost/Mile       = Amount / Miles Driven
-// A fill-up covering more than 1.6x a typical tank (a missed fill-up in between) keeps its miles
-// but is left out of MPG, Cost/Mile and Effective Range.
-// Columns Q onward hold the car split (owed by V / K), fuel stats, spend by category,
-// monthly totals and charts. The script overwrites that area.
+// Fuel math (Fuel rows in odometer order). Fill is Full (default; stopping at the pump click counts)
+// or Partial. Missed Before = Yes when a fill-up before this one was never logged.
+//   Miles Driven     = this odometer - previous fill-up's odometer
+//   Gallons          = as entered, or Amount / Price per gallon when left blank
+//   Full-to-full stretch: from one Full fill to the next Full fill. The tank is full at both ends,
+//                    so every gallon added in between (partials included) is exactly what those
+//                    miles burned.
+//   MPG              = stretch miles / stretch gallons     (shown on the Full fill that closes it)
+//   Cost/Mile        = stretch amount / stretch miles      (same row)
+//   Effective Range  = Miles Driven + Range Left, only when the previous fill was Full
+//   Rolling MPG      = miles over the last 5 fills / gallons of those fills (works with any fills)
+//   Overall MPG      = all stretch miles / all stretch gallons
+// A stretch gets no MPG if it has a missed fill-up or a fill with unknown gallons. A fill covering
+// more than 1.6x a typical tank is treated as Missed Before even if not marked.
+// Columns T onward hold spending, fuel stats, spend by category, chart data and charts.
+// The script overwrites that area.
 // ======================================================================================
 
 const CAR_TAB = 'Sonata';
 const CAR_HEADERS = ['Date', 'Category', 'Station / Vendor', 'Amount ($)', 'Card Used', 'Odometer', 'Miles Driven',
-  'Range Left', 'Effective Range', 'Gallons', 'Price/Gal', 'MPG', 'Cost/Mile', 'Notes', 'ID', 'Expense For'];
+  'Range Left', 'Effective Range', 'Gallons', 'Price/Gal', 'MPG', 'Cost/Mile', 'Notes', 'ID', 'Expense For',
+  'Fill', 'Missed Before'];
 const K = { DATE: 0, CATEGORY: 1, VENDOR: 2, AMOUNT: 3, PAID_BY: 4, ODO: 5, MILES: 6, RANGE: 7, EFF: 8,
-  GAL: 9, PPG: 10, MPG: 11, CPM: 12, NOTES: 13, ID: 14, FOR: 15 };
+  GAL: 9, PPG: 10, MPG: 11, CPM: 12, NOTES: 13, ID: 14, FOR: 15, FILL: 16, MISSED: 17 };
 const CAR_CATEGORIES = ['Fuel', 'Servicing', 'Repairs', 'Mods', 'Insurance', 'Registration/Tax',
   'Tolls/Parking', 'Car wash', 'Misc'];
-const CAR_SUMMARY_COL = 17; // column Q
+const CAR_SUMMARY_COL = 20; // column T
 const CAR_DATA_ROW = 40;    // monthly and fuel-log blocks used by the charts start here
 const CAR_CHART_ROWS = 300; // rows the charts read (room for years of fill-ups)
+const CAR_CHARTS_VERSION = '2';
+const TANK_GALLONS = 13.2;  // 2026 Sonata Hybrid
+const ROLLING_FILLS = 5;
 const OLD_CAR_TAB = 'HyundaiSonata2026';
 
 function getCarSheet_() {
@@ -545,7 +557,16 @@ function getCarSheet_() {
   if (!sheet) sheet = ss.insertSheet(CAR_TAB);
   const isEmpty = readCarRows_(sheet).every(isEmptyCarRow_);
   const header = sheet.getRange(1, 1, 1, CAR_HEADERS.length);
-  if (header.getValues()[0].join('|') !== CAR_HEADERS.join('|')) {
+  const current = header.getValues()[0];
+  if (current.join('|') !== CAR_HEADERS.join('|')) {
+    // Earlier versions kept their summary from column Q, where Fill and Missed Before now go.
+    if (current[K.FILL] !== 'Fill') {
+      const lastCol = sheet.getLastColumn();
+      if (lastCol > K.FOR + 1) {
+        sheet.getRange(1, K.FOR + 2, Math.max(sheet.getLastRow(), 1), lastCol - K.FOR - 1).clearContent().clearFormat();
+      }
+      sheet.getCharts().forEach((c) => sheet.removeChart(c));
+    }
     header.setValues([CAR_HEADERS]).setFontWeight('bold').setBackground('#f3f4f6');
     sheet.setFrozenRows(1);
     sheet.hideColumns(K.ID + 1);
@@ -586,7 +607,8 @@ function importOldFuelLog_(sheet) {
     if (date === '' || amount === '' || toNumber_(amount) === 0) return;
     const paidBy = String(cells[3]).trim().toUpperCase();
     rows.push([date, 'Fuel', String(cells[1]).trim(), toNumber_(amount), paidBy === 'K' ? 'K' : paidBy === 'V' ? 'V' : '',
-      num(cells[4]), '', num(cells[6]), '', num(cells[8]), num(cells[9]), '', '', String(cells[10]).trim(), Utilities.getUuid(), '']);
+      num(cells[4]), '', num(cells[6]), '', num(cells[8]), num(cells[9]), '', '', String(cells[10]).trim(),
+      Utilities.getUuid(), '', 'Full', '']);
   });
   if (rows.length) sheet.getRange(2, 1, rows.length, CAR_HEADERS.length).setValues(rows);
 }
@@ -606,7 +628,11 @@ function validateCar_(b) {
     if (!isFinite(n) || n < 0) throw new Error('Invalid ' + name + '.');
     return n;
   };
+  const fuel = category === 'Fuel';
   const gallons = opt(b.gallons, 'gallons');
+  if (fuel && gallons !== '' && gallons > TANK_GALLONS + 0.2) {
+    throw new Error('Gallons can not be more than the tank holds (' + TANK_GALLONS + ' gal).');
+  }
   const ppg = opt(b.pricePerGallon, 'price per gallon');
   let amount = b.amount === '' || b.amount === undefined || b.amount === null ? NaN : Number(b.amount);
   if (!isFinite(amount) && gallons !== '' && ppg !== '') amount = gallons * ppg;
@@ -618,12 +644,14 @@ function validateCar_(b) {
     vendor: safeText_(String(b.vendor || '').trim().slice(0, 200)),
     amount: round2_(amount),
     paidBy: paidBy,
-    odometer: category === 'Fuel' ? opt(b.odometer, 'odometer') : '',
-    rangeLeft: category === 'Fuel' ? opt(b.rangeLeft, 'range left') : '',
-    gallons: category === 'Fuel' ? gallons : '',
-    pricePerGallon: category === 'Fuel' ? ppg : '',
+    odometer: fuel ? opt(b.odometer, 'odometer') : '',
+    rangeLeft: fuel ? opt(b.rangeLeft, 'range left') : '',
+    gallons: fuel ? gallons : '',
+    pricePerGallon: fuel ? ppg : '',
     notes: safeText_(String(b.notes || '').trim().slice(0, 500)),
     expenseFor: expenseFor,
+    fill: fuel ? (b.fill === 'Partial' ? 'Partial' : 'Full') : '',
+    missedBefore: fuel && b.missedBefore ? 'Yes' : '',
   };
 }
 
@@ -647,7 +675,8 @@ function addCar_(sheet, e) {
   let row = 2;
   for (let i = rows.length - 1; i >= 0; i--) if (!isEmptyCarRow_(rows[i])) { row = i + 3; break; }
   sheet.getRange(row, 1, 1, CAR_HEADERS.length).setValues([[e.date, e.category, e.vendor, e.amount, e.paidBy,
-    e.odometer, '', e.rangeLeft, '', e.gallons, e.pricePerGallon, '', '', e.notes, e.id, e.expenseFor]]);
+    e.odometer, '', e.rangeLeft, '', e.gallons, e.pricePerGallon, '', '', e.notes, e.id, e.expenseFor,
+    e.fill, e.missedBefore]]);
 }
 
 function deleteCar_(sheet, id) {
@@ -657,42 +686,92 @@ function deleteCar_(sheet, id) {
 }
 
 const blankIfNot_ = (v) => (v === '' || v === null || v === undefined ? '' : v);
+const isPartial_ = (r) => String(r[K.FILL]).trim().toLowerCase() === 'partial';
+const isMarkedMissed_ = (r) => /^(y|yes|true|x|1)$/i.test(String(r[K.MISSED]).trim());
 
-// Fills Miles Driven, Effective Range, MPG and Cost/Mile; writes only if something changed.
-function recomputeCar_(sheet) {
-  const rows = readCarRows_(sheet);
-  if (!rows.length) return rows;
+// Gallons as entered, or worked out from amount / price per gallon. null when unknown.
+function gallonsOf_(r) {
+  const g = r[K.GAL] === '' ? 0 : toNumber_(r[K.GAL]);
+  if (g > 0) return g;
+  const ppg = r[K.PPG] === '' ? 0 : toNumber_(r[K.PPG]);
+  const amount = toNumber_(r[K.AMOUNT]);
+  return ppg > 0 && amount > 0 ? amount / ppg : null;
+}
+
+// Works out the fuel numbers for every Fuel row. See the header comment for the formulas.
+function fuelMath_(rows) {
   const fuel = [];
   rows.forEach((r, i) => {
     if (!isEmptyCarRow_(r) && r[K.CATEGORY] === 'Fuel' && r[K.ODO] !== '' && isFinite(toNumber_(r[K.ODO]))) fuel.push(i);
   });
   fuel.sort((a, b) => toNumber_(rows[a][K.ODO]) - toNumber_(rows[b][K.ODO]));
-  const calc = rows.map(() => ({ miles: '', eff: '', mpg: '', cpm: '' }));
-  const milesOf = fuel.map((idx, n) => (n === 0 ? 0 : round2_(toNumber_(rows[idx][K.ODO]) - toNumber_(rows[fuel[n - 1]][K.ODO]))));
-  // A fill-up that was never logged makes the next one cover two tanks. Those (more than 1.6x a typical
-  // tank) keep their miles but are left out of MPG, cost per mile and effective range.
-  const sorted = milesOf.filter((m) => m > 0).sort((a, b) => a - b);
+  const odo = fuel.map((i) => toNumber_(rows[i][K.ODO]));
+  const miles = fuel.map((i, n) => (n === 0 ? 0 : round2_(odo[n] - odo[n - 1])));
+  const sorted = miles.filter((m) => m > 0).sort((a, b) => a - b);
   const typical = sorted.length >= 3 ? sorted[Math.floor(sorted.length / 2)] : 0;
+  const broken = fuel.map((i, n) => n > 0 && (isMarkedMissed_(rows[i]) || (typical > 0 && miles[n] > typical * 1.6)));
+
+  const perRow = rows.map(() => ({ miles: '', eff: '', mpg: '', cpm: '', rolling: '', autoMissed: false }));
+  const stretches = [];
+  let start = null;
+  let gal = 0;
+  let amt = 0;
+  let known = true;
+  let fills = 0;
   fuel.forEach((idx, n) => {
-    const miles = milesOf[n];
-    if (n === 0 || miles <= 0) return; // first fill-up has nothing to compare with
     const r = rows[idx];
-    if (typical && miles > typical * 1.6) {
-      calc[idx] = { miles: miles, eff: '', mpg: '', cpm: '' };
+    const full = !isPartial_(r);
+    const out = perRow[idx];
+    if (n > 0) out.miles = miles[n];
+    if (broken[n] && !isMarkedMissed_(r)) out.autoMissed = true;
+    if (n > 0 && !broken[n] && !isPartial_(rows[fuel[n - 1]]) && r[K.RANGE] !== '') {
+      out.eff = round2_(miles[n] + toNumber_(r[K.RANGE]));
+    }
+    // Rolling MPG over the last ROLLING_FILLS fills (any kind of fill).
+    if (n >= ROLLING_FILLS) {
+      let g = 0;
+      let ok = true;
+      for (let j = n - ROLLING_FILLS + 1; j <= n; j++) {
+        const gj = gallonsOf_(rows[fuel[j]]);
+        if (gj === null || broken[j]) { ok = false; break; }
+        g += gj;
+      }
+      if (ok && g > 0) out.rolling = round2_((odo[n] - odo[n - ROLLING_FILLS]) / g);
+    }
+    if (n === 0 || broken[n]) {
+      start = full ? n : null;
+      gal = 0; amt = 0; known = true; fills = 0;
       return;
     }
-    const gal = r[K.GAL] === '' ? 0 : toNumber_(r[K.GAL]);
-    const amount = toNumber_(r[K.AMOUNT]);
-    calc[idx] = {
-      miles: miles,
-      eff: r[K.RANGE] === '' ? '' : round2_(miles + toNumber_(r[K.RANGE])),
-      mpg: gal > 0 ? round2_(miles / gal) : '',
-      cpm: amount > 0 ? Math.round((amount / miles) * 1000) / 1000 : '',
-    };
+    if (start === null) {
+      if (full) { start = n; gal = 0; amt = 0; known = true; fills = 0; }
+      return;
+    }
+    const g = gallonsOf_(r);
+    if (g === null) known = false; else gal += g;
+    amt += toNumber_(r[K.AMOUNT]);
+    fills++;
+    if (!full) return;
+    const stretchMiles = round2_(odo[n] - odo[start]);
+    if (known && gal > 0 && stretchMiles > 0) {
+      out.mpg = round2_(stretchMiles / gal);
+      out.cpm = Math.round((amt / stretchMiles) * 1000) / 1000;
+      stretches.push({ row: idx, odo: odo[n], miles: stretchMiles, gallons: gal, amount: amt, fills: fills, mpg: out.mpg, cpm: out.cpm });
+    }
+    start = n; gal = 0; amt = 0; known = true; fills = 0;
   });
+  const open = start === null ? null : { startOdo: odo[start], gallons: round2_(gal), amount: round2_(amt), known: known };
+  return { fuel: fuel, odo: odo, perRow: perRow, stretches: stretches, open: open, typical: typical };
+}
+
+// Fills Miles Driven, Effective Range, MPG and Cost/Mile; writes only if something changed.
+function recomputeCar_(sheet) {
+  const rows = readCarRows_(sheet);
+  if (!rows.length) return { rows: rows, math: fuelMath_(rows) };
+  const math = fuelMath_(rows);
   let changed = false;
   const block = rows.map((r, i) => {
-    const c = calc[i];
+    const c = math.perRow[i];
     const out = [c.miles, blankIfNot_(r[K.RANGE]), c.eff, blankIfNot_(r[K.GAL]), blankIfNot_(r[K.PPG]), c.mpg, c.cpm];
     if (r[K.MILES] !== c.miles || r[K.EFF] !== c.eff || r[K.MPG] !== c.mpg || r[K.CPM] !== c.cpm) changed = true;
     r[K.MILES] = c.miles;
@@ -707,7 +786,7 @@ function recomputeCar_(sheet) {
   sheet.getRange(2, K.MPG + 1, rows.length, 1).setNumberFormat('0.00');
   sheet.getRange(2, K.CPM + 1, rows.length, 1).setNumberFormat('$0.000');
   sheet.getRange(2, K.DATE + 1, rows.length, 1).setNumberFormat('yyyy-mm-dd');
-  return rows;
+  return { rows: rows, math: math };
 }
 
 // Whose turn or cost: V, K or Joint. Blank means the card owner's own turn.
@@ -725,67 +804,96 @@ function carOwed_(owner, card, amount) {
   return personalOwed_(owner, card, amount);
 }
 
-function carStats_(rows) {
+function carStats_(rows, math) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const data = rows.filter((r) => !isEmptyCarRow_(r));
-  const n = (v) => (v === '' ? 0 : toNumber_(v));
   const s = {
     v: 0, k: 0, total: 0, owed: 0, turns: { V: 0, K: 0, Joint: 0 },
-    fills: 0, gallons: 0, fuelSpend: 0, avgPpg: 0,
-    mpg: 0, bestMpg: 0, worstMpg: 0, avgMilesPerTank: 0, avgEffRange: 0,
-    fuelCpm: 0, totalCpm: 0, milesTracked: 0, lastOdometer: 0,
-    lastFill: null, byCategory: {}, monthly: [], series: [], recent: [],
+    fills: 0, partials: 0, missed: 0, gallons: 0, fuelSpend: 0, avgPpg: 0,
+    mpg: 0, rollingMpg: 0, bestMpg: 0, worstMpg: 0, avgMilesPerTank: 0, avgEffRange: 0,
+    fuelCpm: 0, totalCpm: 0, milesTracked: 0, lastOdometer: 0, tankGallons: TANK_GALLONS,
+    lastFill: null, open: math.open, byCategory: {}, monthly: [], stretches: [], fills_log: [], recent: [],
   };
   const months = {};
-  let mpgMiles = 0, mpgGallons = 0, cpmMiles = 0, cpmSpend = 0, effSum = 0, effCount = 0, ppgSpend = 0, ppgGallons = 0;
-  let minOdo = Infinity, maxOdo = -Infinity;
-  const mpgs = [];
+  const monthOf = (r) => formatDate_(r[K.DATE], tz).slice(0, 7);
+  let ppgSpend = 0, ppgGallons = 0;
   data.forEach((r) => {
     const amount = toNumber_(r[K.AMOUNT]);
-    const date = formatDate_(r[K.DATE], tz);
     s.total += amount;
     if (r[K.PAID_BY] === 'V') s.v += amount;
     if (r[K.PAID_BY] === 'K') s.k += amount;
     const owner = carOwner_(r);
     s.owed += carOwed_(owner, r[K.PAID_BY], amount);
-    if (r[K.CATEGORY] === 'Fuel' && s.turns[owner] !== undefined) s.turns[owner]++;
     s.byCategory[r[K.CATEGORY]] = (s.byCategory[r[K.CATEGORY]] || 0) + amount;
-    const month = date.slice(0, 7);
+    const month = monthOf(r);
     const m = months[month] || (months[month] = { month: month, fuel: 0, other: 0, total: 0, miles: 0, gallons: 0 });
     m.total += amount;
     if (r[K.CATEGORY] !== 'Fuel') { m.other += amount; return; }
     m.fuel += amount;
     s.fills++;
     s.fuelSpend += amount;
-    if (r[K.GAL] !== '' && n(r[K.GAL]) > 0) { s.gallons += n(r[K.GAL]); ppgSpend += amount; ppgGallons += n(r[K.GAL]); }
-    if (r[K.ODO] !== '') { minOdo = Math.min(minOdo, n(r[K.ODO])); maxOdo = Math.max(maxOdo, n(r[K.ODO])); }
-    if (r[K.MILES] !== '') m.miles += n(r[K.MILES]);
-    if (r[K.CPM] !== '') { cpmMiles += n(r[K.MILES]); cpmSpend += amount; }
-    if (r[K.EFF] !== '') { effSum += n(r[K.EFF]); effCount++; }
-    if (r[K.MPG] !== '') {
-      mpgMiles += n(r[K.MILES]); mpgGallons += n(r[K.GAL]); m.gallons += n(r[K.GAL]);
-      mpgs.push(n(r[K.MPG]));
-      s.series.push({ date: date, odo: n(r[K.ODO]), mpg: n(r[K.MPG]), ppg: n(r[K.PPG]), cpm: n(r[K.CPM]) });
-    }
+    if (s.turns[owner] !== undefined) s.turns[owner]++;
+    if (isPartial_(r)) s.partials++;
+    const g = gallonsOf_(r);
+    if (g !== null) { s.gallons += g; ppgSpend += amount; ppgGallons += g; }
   });
-  s.series.sort((a, b) => a.odo - b.odo);
-  const fuelByOdo = data.filter((r) => r[K.CATEGORY] === 'Fuel' && r[K.ODO] !== '')
-    .sort((a, b) => n(a[K.ODO]) - n(b[K.ODO]));
-  const last = fuelByOdo[fuelByOdo.length - 1];
-  if (last) {
-    s.lastFill = { date: formatDate_(last[K.DATE], tz), odometer: n(last[K.ODO]), miles: last[K.MILES], mpg: last[K.MPG],
-      eff: last[K.EFF], station: String(last[K.VENDOR]) };
-  }
-  s.avgPpg = ppgGallons ? ppgSpend / ppgGallons : 0;
-  s.mpg = mpgGallons ? mpgMiles / mpgGallons : 0;
+
+  // Stretch-based numbers: exact, whatever mix of full and partial fills.
+  let sMiles = 0, sGallons = 0, sAmount = 0, tankMiles = 0, tanks = 0, effSum = 0, effCount = 0;
+  math.stretches.forEach((st) => {
+    sMiles += st.miles; sGallons += st.gallons; sAmount += st.amount;
+    if (st.fills === 1) { tankMiles += st.miles; tanks++; }
+    const r = rows[st.row];
+    const m = months[monthOf(r)];
+    if (m) { m.miles += st.miles; m.gallons += st.gallons; }
+    s.stretches.push({ date: formatDate_(r[K.DATE], tz), odo: st.odo, mpg: st.mpg, cpm: st.cpm, miles: st.miles,
+      gallons: round2_(st.gallons), fills: st.fills });
+  });
+  math.fuel.forEach((idx) => {
+    const r = rows[idx];
+    const c = math.perRow[idx];
+    if (c.eff !== '') { effSum += c.eff; effCount++; }
+    if (isMarkedMissed_(r) || c.autoMissed) s.missed++;
+    const g = gallonsOf_(r);
+    const ppg = r[K.PPG] !== '' && toNumber_(r[K.PPG]) > 0 ? toNumber_(r[K.PPG]) : g ? toNumber_(r[K.AMOUNT]) / g : '';
+    s.fills_log.push({ date: formatDate_(r[K.DATE], tz), odo: toNumber_(r[K.ODO]), rolling: c.rolling,
+      ppg: ppg === '' ? '' : Math.round(ppg * 1000) / 1000, partial: isPartial_(r) });
+  });
+  const mpgs = math.stretches.map((st) => st.mpg);
+  s.mpg = sGallons ? sMiles / sGallons : 0;
+  s.fuelCpm = sMiles ? sAmount / sMiles : 0;
   s.bestMpg = mpgs.length ? Math.max.apply(null, mpgs) : 0;
   s.worstMpg = mpgs.length ? Math.min.apply(null, mpgs) : 0;
-  s.avgMilesPerTank = cpmMiles && s.series.length ? mpgMiles / s.series.length : 0;
+  s.avgMilesPerTank = tanks ? tankMiles / tanks : 0;
   s.avgEffRange = effCount ? effSum / effCount : 0;
-  s.fuelCpm = cpmMiles ? cpmSpend / cpmMiles : 0;
-  s.milesTracked = maxOdo > minOdo ? maxOdo - minOdo : 0;
-  s.lastOdometer = maxOdo > -Infinity ? maxOdo : 0;
-  s.totalCpm = s.milesTracked ? s.total / s.milesTracked : 0;
+  const rolling = s.fills_log.filter((f) => f.rolling !== '');
+  s.rollingMpg = rolling.length ? rolling[rolling.length - 1].rolling : 0;
+  s.avgPpg = ppgGallons ? ppgSpend / ppgGallons : 0;
+
+  const odos = math.odo;
+  s.lastOdometer = odos.length ? odos[odos.length - 1] : 0;
+  s.milesTracked = odos.length > 1 ? odos[odos.length - 1] - odos[0] : 0;
+  // Fuel bought at or before the first odometer reading drove miles before tracking started.
+  const firstOdo = odos.length ? odos[0] : null;
+  const firstFill = math.fuel.length ? rows[math.fuel[0]] : null;
+  let before = 0;
+  if (firstFill) {
+    const firstDate = formatDate_(firstFill[K.DATE], tz);
+    data.forEach((r) => {
+      if (r[K.CATEGORY] !== 'Fuel') return;
+      const o = r[K.ODO] === '' ? null : toNumber_(r[K.ODO]);
+      if ((o !== null && o <= firstOdo) || (o === null && formatDate_(r[K.DATE], tz) <= firstDate)) before += toNumber_(r[K.AMOUNT]);
+    });
+  }
+  s.totalCpm = s.milesTracked ? (s.total - before) / s.milesTracked : 0;
+
+  if (math.fuel.length) {
+    const lastIdx = math.fuel[math.fuel.length - 1];
+    const r = rows[lastIdx];
+    const c = math.perRow[lastIdx];
+    s.lastFill = { date: formatDate_(r[K.DATE], tz), odometer: toNumber_(r[K.ODO]), miles: c.miles, mpg: c.mpg,
+      eff: c.eff, station: String(r[K.VENDOR]), partial: isPartial_(r) };
+  }
   s.monthly = Object.keys(months).sort().map((k) => {
     const m = months[k];
     return { month: k, fuel: round2_(m.fuel), other: round2_(m.other), total: round2_(m.total), miles: round2_(m.miles),
@@ -800,14 +908,15 @@ function carStats_(rows) {
     id: String(r[K.ID]), date: formatDate_(r[K.DATE], tz), category: String(r[K.CATEGORY]), vendor: String(r[K.VENDOR]),
     amount: toNumber_(r[K.AMOUNT]), paidBy: String(r[K.PAID_BY]), notes: String(r[K.NOTES]),
     odometer: r[K.ODO], miles: r[K.MILES], mpg: r[K.MPG], eff: r[K.EFF], gallons: r[K.GAL], ppg: r[K.PPG],
-    expenseFor: carOwner_(r),
+    expenseFor: carOwner_(r), fill: r[K.CATEGORY] === 'Fuel' ? (isPartial_(r) ? 'Partial' : 'Full') : '',
+    missedBefore: isMarkedMissed_(r),
   }));
   return s;
 }
 
-// Columns Q onward: what V and K have paid, fuel stats, spend by category, and the data the charts read.
+// Columns T onward: what V and K have paid, fuel stats, spend by category, and the data the charts read.
 function writeCarSummary_(sheet, s) {
-  const WIDTH = 11; // Q:AA
+  const WIDTH = 14; // T:AG
   const line = (...cells) => cells.concat(new Array(WIDTH - cells.length).fill(''));
   const blank = () => line();
   const out = [
@@ -816,31 +925,35 @@ function writeCarSummary_(sheet, s) {
     line(s.v, s.k, s.total),                                            // 3
     line('Owed from joint or other-card costs', s.settle),              // 4
     line('Fuel stats'),                                                 // 5
-    line('Average MPG', s.mpg),                                         // 6
-    line('Best / worst MPG', s.bestMpg, s.worstMpg),                    // 7
-    line('Average price per gallon', s.avgPpg),                         // 8
-    line('Fuel cost per mile', s.fuelCpm),                              // 9
-    line('Total car cost per mile', s.totalCpm),                        // 10
-    line('Average miles per tank', s.avgMilesPerTank),                  // 11
-    line('Average effective range', s.avgEffRange),                     // 12
-    line('Fill-ups', s.fills),                                          // 13
-    line('Gallons bought', s.gallons),                                  // 14
-    line('Fuel spend', s.fuelSpend),                                    // 15
-    line('Miles tracked', s.milesTracked),                              // 16
-    line('Last odometer', s.lastOdometer),                              // 17
-    line('Fill-ups by turn', 'V ' + s.turns.V, 'K ' + s.turns.K, 'Joint ' + s.turns.Joint), // 18
-    line('Spend by category'),                                          // 19
+    line('Overall MPG (full-to-full)', s.mpg),                          // 6
+    line('Rolling MPG (last ' + ROLLING_FILLS + ' fills)', s.rollingMpg), // 7
+    line('Best / worst MPG', s.bestMpg, s.worstMpg),                    // 8
+    line('Average price per gallon', s.avgPpg),                         // 9
+    line('Fuel cost per mile', s.fuelCpm),                              // 10
+    line('Total car cost per mile', s.totalCpm),                        // 11
+    line('Average miles per full tank', s.avgMilesPerTank),             // 12
+    line('Average effective range', s.avgEffRange),                     // 13
+    line('Fill-ups / partial / missed', s.fills, s.partials, s.missed), // 14
+    line('Gallons bought', s.gallons),                                  // 15
+    line('Fuel spend', s.fuelSpend),                                    // 16
+    line('Miles tracked', s.milesTracked),                              // 17
+    line('Last odometer', s.lastOdometer),                              // 18
+    line('Fill-ups by turn', 'V ' + s.turns.V, 'K ' + s.turns.K, 'Joint ' + s.turns.Joint), // 19
+    line('Spend by category'),                                          // 20
   ];
-  CAR_CATEGORIES.forEach((c) => out.push(line(c, s.byCategory[c] || 0))); // 20-28
-  out.push(line('Total car spend', s.total));                            // 29
+  CAR_CATEGORIES.forEach((c) => out.push(line(c, s.byCategory[c] || 0))); // 21-29
+  out.push(line('Total car spend', s.total));                            // 30
   while (out.length < CAR_DATA_ROW - 1) out.push(blank());
-  out.push(line('Month', 'Fuel', 'Other', 'Total', 'Miles', 'MPG', '', 'Date', 'MPG', 'Price/Gal', 'Cost/Mile')); // 40
-  const rowsNeeded = Math.max(s.monthly.length, s.series.length);
+  out.push(line('Month', 'Fuel', 'Other', 'Total', 'Miles', 'MPG', '',
+    'Full tank date', 'MPG', 'Cost/Mile', '', 'Fill date', 'Rolling MPG', 'Price/Gal')); // 40
+  const rowsNeeded = Math.max(s.monthly.length, s.stretches.length, s.fills_log.length);
   for (let i = 0; i < rowsNeeded; i++) {
     const m = s.monthly[i];
-    const f = s.series[i];
+    const st = s.stretches[i];
+    const f = s.fills_log[i];
     out.push(line(m ? m.month : '', m ? m.fuel : '', m ? m.other : '', m ? m.total : '', m ? m.miles : '', m ? m.mpg : '', '',
-      f ? f.date : '', f ? f.mpg : '', f ? f.ppg : '', f ? f.cpm : ''));
+      st ? st.date : '', st ? st.mpg : '', st ? st.cpm : '', '',
+      f ? f.date : '', f ? f.rolling : '', f ? f.ppg : ''));
   }
 
   const last = Math.max(sheet.getLastRow(), out.length, CAR_DATA_ROW + CAR_CHART_ROWS);
@@ -855,28 +968,32 @@ function writeCarSummary_(sheet, s) {
   }
 
   const cell = (row, col, rows, cols) => sheet.getRange(row, CAR_SUMMARY_COL + col, rows || 1, cols || 1);
-  [1, 5, 19].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
+  [1, 5, 20].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
   cell(2, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6');
   cell(40, 0, 1, WIDTH).setFontWeight('bold').setBackground('#f3f4f6');
   cell(3, 0, 1, 3).setNumberFormat(MONEY);
-  cell(4, 0, 1, 2).setFontWeight('bold');
-  [8, 9, 10].forEach((row) => cell(row, 1).setNumberFormat('$0.000'));
-  cell(15, 1).setNumberFormat(MONEY);
-  cell(20, 1, CAR_CATEGORIES.length + 1, 1).setNumberFormat(MONEY);
-  cell(29, 0, 1, 2).setFontWeight('bold');
+  [4, 6].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
+  [9, 10, 11].forEach((row) => cell(row, 1).setNumberFormat('$0.000'));
+  cell(16, 1).setNumberFormat(MONEY);
+  cell(21, 1, CAR_CATEGORIES.length + 1, 1).setNumberFormat(MONEY);
+  cell(30, 0, 1, 2).setFontWeight('bold');
   ensureCarCharts_(sheet);
 }
 
-// Charts are created once and read fixed ranges, so they grow as rows are added.
+// Charts read fixed ranges, so they grow as rows are added. They are rebuilt when the layout changes.
 function ensureCarCharts_(sheet) {
-  if (sheet.getCharts().length) return;
+  const props = PropertiesService.getScriptProperties();
+  const current = props.getProperty('SONATA_CHARTS') === CAR_CHARTS_VERSION;
+  if (current && sheet.getCharts().length) return;
+  sheet.getCharts().forEach((c) => sheet.removeChart(c));
   const col = (offset) => sheet.getRange(CAR_DATA_ROW, CAR_SUMMARY_COL + offset, CAR_CHART_ROWS, 1);
-  const chartCol = CAR_SUMMARY_COL + 12; // column AC
+  const chartCol = CAR_SUMMARY_COL + 15; // column AI
   const charts = [
-    { type: Charts.ChartType.LINE, x: 7, y: 8, title: 'MPG per fill-up', row: 1 },
-    { type: Charts.ChartType.LINE, x: 7, y: 9, title: 'Price per gallon', row: 20 },
-    { type: Charts.ChartType.LINE, x: 7, y: 10, title: 'Fuel cost per mile', row: 39 },
-    { type: Charts.ChartType.COLUMN, x: 0, y: 3, title: 'Car spend per month', row: 58 },
+    { type: Charts.ChartType.LINE, x: 7, y: 8, title: 'MPG per full tank (full-to-full)', row: 1 },
+    { type: Charts.ChartType.LINE, x: 11, y: 12, title: 'Rolling MPG (last ' + ROLLING_FILLS + ' fills)', row: 20 },
+    { type: Charts.ChartType.LINE, x: 11, y: 13, title: 'Price per gallon', row: 39 },
+    { type: Charts.ChartType.LINE, x: 7, y: 9, title: 'Fuel cost per mile', row: 58 },
+    { type: Charts.ChartType.COLUMN, x: 0, y: 3, title: 'Car spend per month', row: 77 },
   ];
   charts.forEach((c) => {
     sheet.insertChart(sheet.newChart()
@@ -886,14 +1003,16 @@ function ensureCarCharts_(sheet) {
       .setNumHeaders(1)
       .setOption('title', c.title)
       .setOption('legend', { position: 'none' })
+      .setOption('interpolateNulls', true)
       .setPosition(c.row, chartCol, 0, 0)
       .build());
   });
+  props.setProperty('SONATA_CHARTS', CAR_CHARTS_VERSION);
 }
 
 function carState_(sheet) {
-  const rows = recomputeCar_(sheet);
-  const stats = carStats_(rows);
+  const res = recomputeCar_(sheet);
+  const stats = carStats_(res.rows, res.math);
   writeCarSummary_(sheet, stats);
   return stats;
 }

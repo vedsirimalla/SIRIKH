@@ -107,32 +107,40 @@ Do not type in columns J onward; the script overwrites them.
 Pick **Sonata** under Type. The form switches to car fields and the dashboard shows car stats, charts, and what V and K have each paid. Nothing here touches the monthly budget or the Sirikh tab.
 
 - **Categories (buttons):** Fuel, Servicing, Repairs, Mods, Insurance, Registration/Tax, Tolls/Parking, Car wash, Misc.
-- **Fuel entry:** gas station, odometer, range left, gallons, price per gallon. Amount fills in from gallons x price. A live preview shows miles, MPG and effective range before you save. An odometer lower than the last fill-up is rejected.
+- **Fuel entry:** gas station, odometer, range left, gallons, price per gallon, **Fill** (Full or Partial) and **"I missed logging a fill-up before this one"**. Amount fills in from gallons x price. A live preview shows miles, MPG and cost per mile before you save.
+  - **Full** = you filled until the pump clicked (the default). **Partial** = you stopped early.
+  - Checks: gallons above the 13.2 gal tank are rejected; an odometer lower than the last fill-up is rejected; a "Full" fill that leaves the tank well short of 13.2 gal gets a "looks partial" warning.
 - **Other categories:** vendor or description and amount.
 
-Columns: Date | Category | Station / Vendor | Amount ($) | Card Used | Odometer | Miles Driven | Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID (hidden) | Expense For
+Columns: Date | Category | Station / Vendor | Amount ($) | Card Used | Odometer | Miles Driven | Range Left | Effective Range | Gallons | Price/Gal | MPG | Cost/Mile | Notes | ID (hidden) | Expense For | Fill | Missed Before
 
-Calculated by the script for Fuel rows, in odometer order:
+Fuel math (Fuel rows in odometer order). It stays correct whatever mix of full and partial fills you log:
 
-| Column | Formula |
+| Number | Formula |
 |---|---|
 | Miles Driven | this odometer minus the previous fill-up's odometer |
-| Effective Range | Miles Driven + Range Left |
-| MPG | Miles Driven / Gallons of this fill-up |
-| Cost/Mile | Amount / Miles Driven |
+| Gallons | as entered, or Amount / Price per gallon when left blank |
+| MPG | full-to-full: miles from one Full fill to the next / **all** gallons added in between (partials included). The tank is full at both ends, so those gallons are exactly what the miles burned. Shown on the Full fill that closes the stretch; Partial rows have none |
+| Cost/Mile | stretch amount / stretch miles (same row) |
+| Effective Range | Miles Driven + Range Left, only when the previous fill was Full |
+| Overall MPG (headline) | all stretch miles / all stretch gallons |
+| Rolling MPG | miles over the last 5 fills / gallons of those fills (any fills) |
+| Average price per gallon | fuel spend / gallons (every fill) |
 
-A fill-up covering more than 1.6x a typical tank (a fill-up was missed in between) keeps its miles but is left out of MPG, Cost/Mile and Effective Range.
+- **Missed fill-ups:** a stretch with a missed fill-up gets no MPG and tracking restarts there. Mark it with the switch, or type Yes in **Missed Before**; a fill covering more than 1.6x a typical tank is also caught automatically.
+- **Unknown gallons:** a stretch with a fill that has neither gallons nor price is skipped.
+- **Fixing history:** type **Partial** in the **Fill** column of any row (for example Oct 5) and everything recalculates.
 
-Columns Q onward (rebuilt on every save):
+Columns T onward (rebuilt on every save):
 
 1. **Spent so far:** V paid, K paid, Total spent (all car costs, by whose card paid), then "Owed from joint or other-card costs":
    - Own turn (Expense For matches the card, or blank): nothing owed.
    - Joint (for example a trip fill-up): split 50/50, the other person owes half to the card owner.
    - A turn paid on the other person's card: owed in full.
    Fuel stats also show fill-ups by turn (V, K, Joint).
-2. **Fuel stats:** average, best and worst MPG; average price per gallon; fuel and total cost per mile; average miles per tank; average effective range; fill-ups; gallons; fuel spend; miles tracked; last odometer.
+2. **Fuel stats:** overall and rolling MPG, best and worst MPG, average price per gallon, fuel and total cost per mile, average miles per full tank, average effective range, fill-ups / partial / missed, gallons, fuel spend, miles tracked, last odometer, fill-ups by turn.
 3. **Spend by category** and total car spend.
-4. **Monthly table and fuel log** (from row 40), which feed four charts: MPG per fill-up, price per gallon, fuel cost per mile, and car spend per month.
+4. **Monthly table and fuel log** (from row 40), which feed five charts: MPG per full tank, rolling MPG, price per gallon (every fill), fuel cost per mile, and car spend per month.
 
 The first time the app loads with an empty Sonata tab (yours, or one it creates), the 15 fill-ups from the closed HyundaiSonata2026 tab are copied in once. HyundaiSonata2026 is only read, never edited. All new car entries go to the Sonata tab.
 
@@ -202,7 +210,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 14" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 15" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

@@ -120,8 +120,9 @@
         <div id="carTitle" class="eyebrow">Sonata</div>
         <div class="left-line">
           <span id="carMpg" class="balance-amount">—</span>
-          <span class="left-word">avg MPG</span>
+          <span class="left-word">overall MPG</span>
         </div>
+        <div id="carRolling" class="pace"></div>
         <div class="stats six">
           <div><span class="stat-label">Price / gal</span><span id="carPpg">—</span></div>
           <div><span class="stat-label">Fuel $ / mile</span><span id="carFuelCpm">—</span></div>
@@ -213,6 +214,19 @@
               <input type="text" id="ppg" inputmode="decimal" placeholder="3.899">
             </label>
           </div>
+          <fieldset class="seg-field">
+            <legend>Fill</legend>
+            <div class="seg two" id="fillSeg">
+              <input type="radio" name="fillType" id="fillFull" value="Full" checked>
+              <label for="fillFull">Full (pump clicked)</label>
+              <input type="radio" name="fillType" id="fillPartial" value="Partial">
+              <label for="fillPartial">Partial</label>
+            </div>
+          </fieldset>
+          <label class="check">
+            <input type="checkbox" id="missedBefore">
+            <span>I missed logging a fill-up before this one</span>
+          </label>
           <div id="fuelPreview" class="fuel-preview" hidden></div>
         </div>
       </div>
