@@ -6,7 +6,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 
 ## Features
 
-- **Entry form:** Date (calendar, defaults to today), Type (Joint, Fixed, Personal or Sonata), Category, Amount, Expense for, Card used, Notes.
+- **Entry form:** Date (calendar, defaults to today), Type (Joint, Fixed, Personal, Sonata or Funds), Category, Amount, Expense for, Card used, Notes.
   - **Card used:** whose card paid (V's card or K's card).
   - **Expense for:** whose expense it is. Personal: V or K. Sonata: V or K (whose turn) or Joint. Joint and Fixed are always shared.
   - **Owed in full:** a one-person expense on the other person's card is owed back in full. Example: K orders ramen for herself and it goes on V's card, so K owes V the whole amount. The app shows this before you save.
@@ -17,6 +17,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - **Joint:** the joint monthly budget (below).
   - **Personal:** a personal budget for V and one for K, for a calendar month. **Set personal budget** sets either or both for the month of its start date. Every Personal expense for that person dated in that month comes out of it, whoever's card paid and even if it was logged before the budget was set (K's ramen on V's card reduces K's budget, and K still owes V).
   - **Fixed and Sonata:** no budget. Fixed bills get paid regardless; Sonata shows car stats instead.
+  - **Funds:** the monthly money picture instead of a budget (see "Funds tab" below).
 - **Joint monthly budget:**
   - **Set monthly budget** sets the budget for the current month, for example $705. Expenses already logged that month count right away.
   - **Joint** expenses are deducted the moment they are saved.
@@ -29,6 +30,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - A plain line such as "V owes K $140.50", plus an overall line that includes fixed bills.
 - **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total, and who owes whom for fixed bills.
 - **Sonata (car):** the fourth Type option. Car costs and fuel go to their own **Sonata** tab. V and K take turns paying (V three tanks, K the fourth), so own turns owe nothing; Joint costs split 50/50. See "Sonata tab" below.
+- **Funds:** the fifth Type option. Income, investments, V's loan, rolling savings and a savings goal, in their own **Funds** tab. See "Funds tab" below.
 - **Color coding** (in the app and the sheet):
 
   | Type | Color |
@@ -58,6 +60,56 @@ A settlement is **not an expense**: it never touches budgets, spending or catego
 - **Pay in parts or in one go:** each payment is its own row. Labels are automatic: "Settlement 1 (partial) via Splitwise", "Settlement 2 (final, cleared) via Cash", or "Settlement (paid in full) via Zelle" for a single payment; deleting a payment renumbers the rest. The form shows what is left after the payment you type.
 - **Overpay guard:** a payment above what is owed asks for confirmation, so a typo cannot flip the debt to the other person.
 
+## Funds tab
+
+Pick **Funds** under Type. It answers: how much came in this month, where it went, how much is left, how much is saved from earlier months, and whether the goal is on pace. Everything updates the moment an entry is saved, including Joint, Fixed, Personal and Sonata expenses.
+
+**Kinds (buttons):**
+
+| Kind | What to log | Person |
+|---|---|---|
+| Income | Money in hand after 401(K), insurance and taxes: Salary, Tax refund, Bonus, Other | V, K, or Both (split half each) |
+| Invest | Money put away: 401(K), India, USA, Other | V or K |
+| Loan | A payment on V's loan | V (or K) |
+| Savings | Spending from rolling savings (earlier months), with what it was for | V, K or Both |
+
+Log each paycheck as it arrives (V 3,138.18 and K 2,958.70 per paycheck at the moment). The 401(K) is taken out before the paycheck, so also log it as an Invest entry: it then counts toward the goal.
+
+**This month (Combined, V, K):**
+
+| Line | Formula |
+|---|---|
+| Income | Income entries dated this month |
+| Joint, Fixed | the month's Joint and Fixed spending, half each |
+| Personal | each person's own Personal spending (Expense For), whoever's card paid |
+| Sonata | Joint car costs half each; V's and K's turns to their owner |
+| Invested, Loan | Invest and Loan entries this month, to their owner |
+| Total out | Joint/2 + Fixed/2 + Personal + Sonata + Invested + Loan |
+| **Left this month** | Income minus Total out |
+
+Settlements are ignored: they move money between V and K, not out of the household. Splitting shared costs half each also means who paid with which card does not matter here.
+
+**Rolling savings:** the sum of earlier months' Left, minus Savings entries. Kept apart from this month. On the 1st, last month's Left joins it. **After this month** shows rolling plus this month's Left.
+
+**Goal:** **Set goal** asks for a target, a deadline month and, the first time only, what each person had already invested before tracking (prefilled V 243.60 and K 6,409.00 from the Fam. tab; change them if needed). The goal is split equally: each person aims for half.
+
+| Number | Formula |
+|---|---|
+| Invested | Invest entries plus the before-tracking amounts (401(K) included) |
+| To go | half the target minus what that person has invested (never below 0) |
+| Months left | months from this month through the deadline month, both included |
+| Needed per month | To go / Months left, per person |
+| Average | invested per tracked month, from Invest entries |
+| Finish estimate | To go / Average, from this month |
+
+Suggestions under the goal: the monthly amount for each person, when your current average would reach the goal, who is ahead and by how much, how much of this month's Left would hit this month's target, and what investing rolling savings would do. Rolling savings never count toward the goal unless you log them as an Invest entry.
+
+**V's loan:** **Set loan balance** once (balance and date). Loan payments dated after it count it down. The card shows remaining, paid since, the average monthly payment over the last 3 months (months without a payment skipped), and the estimated payoff month. Enter the balance again any time to correct it.
+
+**Funds tab in the sheet:** Date | Kind | Category | Amount ($) | Person | Notes | ID (hidden). Rows are colored by Kind (Income green, Invest purple, Loan red, Savings yellow, Goal blue). Columns I onward, rebuilt on every save: This month (Combined, V, K), Rolling savings, Goal, Loan, Month by month (Income, Spent, Invested, Loan, Left, Rolling after) and Suggestions. Do not type in columns I onward. Hand edits to rows in columns A to F recalculate everything.
+
+Tracking starts with the first month that has an Income entry. The **श्री. Fam.** tab is never read or changed.
+
 ## Files
 
 Keep all files at the top level of the repo.
@@ -66,7 +118,7 @@ Keep all files at the top level of the repo.
 |---|---|
 | `index.html` | App screen |
 | `styles.css` | Styling, light and dark mode |
-| `app.js` | Form, balance, offline queue, sync |
+| `app.js` | Form, balance, Funds picture, offline queue, sync |
 | `sw.js` | Lets the app open offline |
 | `manifest.webmanifest` | Home screen name, colors, icons |
 | `icon-180.png`, `icon-192.png`, `icon-512.png` | Icons |
@@ -74,7 +126,7 @@ Keep all files at the top level of the repo.
 
 ## How the sheet is chosen
 
-The app never uses the Google Sheets URL. It talks to the **Apps Script web app** you deploy from inside the spreadsheet, and that script writes to whichever spreadsheet you opened it from. Joint, Fixed and Personal entries go to **one tab per month**; car entries go to the **Sonata** tab.
+The app never uses the Google Sheets URL. It talks to the **Apps Script web app** you deploy from inside the spreadsheet, and that script writes to whichever spreadsheet you opened it from. Joint, Fixed and Personal entries go to **one tab per month**; car entries go to the **Sonata** tab; income, investments and the loan go to the **Funds** tab.
 
 ## Monthly tabs
 
@@ -223,7 +275,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 18" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal, Sonata or Funds entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 19" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

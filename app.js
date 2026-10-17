@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 19; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 20; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
@@ -11,6 +11,7 @@
     Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
     Personal: "Personal: one person's own expense, not in the budget. If it goes on the other person's card, they are owed the full amount.",
     Car: "Sonata: car costs and fuel, saved to the Sonata tab. Expense for: whose turn it is (V or K), or Joint to split 50/50.",
+    Funds: 'Funds: money in and out of your pockets, saved to the Funds tab. Income minus spending, investments and the loan is what is left this month.',
   };
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
@@ -26,6 +27,7 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
+    if (op.table === 'funds') return 19;
     if (op.table === 'car') return op.op !== 'add' ? 9 : op.entry.category === 'Settlement' ? 18 : 15;
     if (op.op !== 'add') return 0;
     if (op.entry.type === 'Settlement') return 18;
@@ -171,7 +173,7 @@
 
     const queue = getQueue();
     for (const op of queue) {
-      if (op.table === 'car') continue;
+      if (op.table) continue; // Sonata and Funds have their own numbers
       if (op.op === 'add') {
         if (!sameMonth(op.entry)) continue;
         if (op.entry.type === 'Set balance') { p.start = op.entry.amount; hasBalance = true; }
@@ -195,7 +197,7 @@
       : { joint: true, V: !!(st && st.personalBudgets && st.personalBudgets.V), K: !!(st && st.personalBudgets && st.personalBudgets.K) };
     // Budgets set on this phone but not synced yet.
     for (const op of getQueue()) {
-      if (op.op !== 'add' || op.table === 'car' || String(op.entry.date).slice(0, 7) !== currentMonth()) continue;
+      if (op.op !== 'add' || op.table || String(op.entry.date).slice(0, 7) !== currentMonth()) continue;
       if (op.entry.type === 'Set balance') need.joint = false;
       if (op.entry.type === 'Personal budget') need[op.entry.expenseFor] = false;
     }
@@ -208,7 +210,7 @@
     const dismissed = store.get('promptDismissed', '') === currentMonth();
     const personal = ['V', 'K'].filter((w) => need[w]);
     const show = !dismissed && !!getSettings() && (need.joint || personal.length > 0);
-    card.hidden = !show || isCarMode();
+    card.hidden = !show || isCarMode() || isMoneyMode();
     if (!show) return;
     const name = monthName(currentMonth());
     const parts = [];
@@ -342,9 +344,10 @@
   const isCarMode = () => selectedType() === 'Car';
 
   function renderRecent() {
+    if (isMoneyMode()) return renderMoneyRecent();
     const state = getState();
     const isCar = isCarMode();
-    const queue = getQueue().filter((op) => (op.table === 'car') === isCar);
+    const queue = getQueue().filter((op) => (op.table || 'main') === (isCar ? 'car' : 'main'));
     const deleting = new Set(queue.filter((op) => op.op === 'delete').map((op) => op.id));
     const pending = queue.filter((op) => op.op === 'add').map((op) => ({ ...op.entry, pending: true })).reverse();
     const source = state ? (isCar ? (state.car && state.car.recent) || [] : state.recent || []) : [];
@@ -406,7 +409,7 @@
         del.className = 'del';
         del.setAttribute('aria-label', `Delete ${r.category}`);
         del.textContent = '×';
-        del.addEventListener('click', () => removeEntry(r, isCar));
+        del.addEventListener('click', () => removeEntry(r, isCar ? 'car' : ''));
         li.appendChild(del);
       }
       list.appendChild(li);
@@ -421,8 +424,10 @@
   function render() {
     const type = selectedType();
     const isCar = type === 'Car';
-    $('mainDash').hidden = isCar;
+    const isMoney = type === 'Funds';
+    $('mainDash').hidden = isCar || isMoney;
     $('carDash').hidden = !isCar;
+    $('moneyDash').hidden = !isMoney;
     renderBalance();
     renderPersonalBudgets();
     renderMonthPrompt();
@@ -434,6 +439,7 @@
     if (type === 'Fixed') $('fixedCard').hidden = false;
     if (type === 'Personal') $('fixedCard').hidden = true;
     if (isCar) renderCar();
+    if (isMoney) renderMoney();
     renderRecent();
   }
 
@@ -451,7 +457,7 @@
     // that month counts, whoever's card paid, even one logged before the budget was set.
     const inMonth = (b, date) => b && String(date).slice(0, 7) === b.month;
     for (const op of getQueue()) {
-      if (op.table === 'car') continue;
+      if (op.table) continue;
       if (op.op === 'add' && op.entry.type === 'Personal budget') {
         const month = op.entry.date.slice(0, 7);
         if (month !== currentMonth()) continue;
@@ -536,7 +542,7 @@
     const u = (((getState() || {}).unsettled) || []).find((x) => x.month === month);
     let r = u ? u.remaining : 0;
     for (const op of getQueue()) {
-      if (op.op === 'add' && op.table !== 'car' && op.entry.type === 'Settlement' && op.entry.month === month) {
+      if (op.op === 'add' && !op.table && op.entry.type === 'Settlement' && op.entry.month === month) {
         r -= op.entry.paidBy === 'K' ? op.entry.amount : -op.entry.amount;
       }
     }
@@ -926,6 +932,7 @@
       personalBudgets: data.personalBudgets || null,
       month: data.month || '',
       needsBudget: data.needsBudget || null,
+      funds: data.funds || null,
     });
     store.set('syncedAt', Date.now());
   }
@@ -963,7 +970,7 @@
           if (err.kind !== 'server') throw err;
           // The sheet refused this change (bad data); drop it so it does not block the rest.
           rejected = true;
-          const what = op.op === 'add' ? `${op.entry.category} ${money(op.entry.amount)}` : 'delete';
+          const what = op.op === 'add' ? `${op.entry.category || op.entry.kind} ${money(op.entry.amount)}` : 'delete';
           showBanner(`Not saved (${what}): ${err.message}`, 'err', true);
         }
         setQueue(getQueue().filter((o) => o.opId !== op.opId));
@@ -1014,12 +1021,17 @@
     $('typeHint').textContent = TYPE_HINTS[type];
     const fixed = type === 'Fixed';
     const car = type === 'Car';
+    const moneyType = type === 'Funds';
     $('category').hidden = fixed;
     $('fixedPicker').hidden = !fixed;
-    $('categoryField').hidden = car;
+    $('categoryField').hidden = car || moneyType;
     $('carFields').hidden = !car;
+    $('moneyFields').hidden = !moneyType;
+    $('payGrid').hidden = moneyType;
+    $('owedHint').hidden = true;
     $('categoryLabel').textContent = fixed ? 'Fixed bill' : 'Category';
-    $('saveBtn').textContent = car ? 'Save car expense' : 'Save expense';
+    $('saveBtn').textContent = car ? 'Save car expense' : moneyType ? 'Save to Funds' : 'Save expense';
+    if (moneyType) setupMoneyFields();
     setupExpenseFor(type);
     updateCarFields();
     render();
@@ -1067,7 +1079,7 @@
       hint.hidden = false;
       return;
     }
-    if ((owner !== 'V' && owner !== 'K') || owner === card) { hint.hidden = true; return; }
+    if ((owner !== 'V' && owner !== 'K') || owner === card || isMoneyMode()) { hint.hidden = true; return; }
     hint.textContent = `${owner}'s expense on ${card}'s card: ${owner} owes ${card} the full ` +
       (amount ? money(amount) : 'amount') + '.';
     hint.hidden = false;
@@ -1244,6 +1256,10 @@
       if (!date) return markInvalid($('date'), 'Pick a date.');
       return saveCar(date);
     }
+    if (type === 'Funds') {
+      if (!date) return markInvalid($('date'), 'Pick a date.');
+      return saveMoney(date);
+    }
     const category = type === 'Fixed' ? selectedFixed() : $('category').value.trim();
     const amount = parseAmount($('amount').value);
     if (!date) return markInvalid($('date'), 'Pick a date.');
@@ -1290,8 +1306,9 @@
   });
 
   // ---------- Delete from Recent
-  async function removeEntry(item, isCar) {
-    const name = isCar ? item.vendor || item.category : item.category;
+  async function removeEntry(item, table) {
+    const isCar = table === 'car';
+    const name = isCar ? item.vendor || item.category : item.category || item.kind;
     if (!confirm(`Delete "${name}" ${money(item.amount)} from ${prettyDate(item.date)}?`)) return;
     const queue = getQueue();
     const queued = queue.find((op) => op.op === 'add' && op.entry.id === item.id);
@@ -1302,7 +1319,7 @@
       showBanner('Removed.', 'ok');
       return;
     }
-    enqueue(isCar ? { op: 'delete', table: 'car', id: item.id } : { op: 'delete', id: item.id });
+    enqueue(table ? { op: 'delete', table, id: item.id } : { op: 'delete', id: item.id });
     const status = await sync();
     if (status === 'ok') showBanner('Deleted ✓', 'ok');
     if (status === 'offline') showBanner('Will delete when you are back online.', 'warn');
@@ -1344,6 +1361,464 @@
     });
     const status = await sync();
     report(status, `Budget set ✓ ${money(amount)} for ${monthName(date)}`);
+  });
+
+  // ---------- Funds: income, investments, the loan, rolling savings and the goal
+  const isMoneyMode = () => selectedType() === 'Funds';
+  const MONEY_KINDS = {
+    'Income': { label: 'Source', chips: ['Salary', 'Tax refund', 'Bonus', 'Other'], both: true, otherHint: 'Where it came from' },
+    'Investment': { label: 'Where', chips: ['401(K)', 'India', 'USA', 'Other'], both: false, otherHint: 'Brokerage, HSA...' },
+    'Loan payment': { label: '', chips: null, both: false },
+    'Use savings': { label: 'What for', chips: null, both: true, otherHint: 'Flight to India, laptop...' },
+  };
+  const MONEY_HINTS = {
+    'Income': 'Income: in hand after 401(K), insurance and taxes (salary, tax refund, bonus). Both splits it half each.',
+    'Investment': 'Investment: money put away (401(K), India, USA). Counts toward the goal and comes out of this month.',
+    'Loan payment': "Loan payment: a payment on V's loan. Comes out of this month and counts the loan balance down.",
+    'Use savings': 'Savings: spend from rolling savings (earlier months). Leaves this month alone.',
+  };
+  const KIND_TAGS = { 'Income': 'Income', 'Investment': 'Invested', 'Loan payment': 'Loan', 'Loan balance': 'Loan balance', 'Use savings': 'Savings used', 'Prior investment': 'Invested before', 'Goal': 'Goal' };
+  const KIND_CLASS = { 'Income': 'c-income', 'Investment': 'c-invest', 'Prior investment': 'c-invest', 'Loan payment': 'c-loan', 'Loan balance': 'c-loan', 'Use savings': 'c-savings', 'Goal': 'c-goal' };
+
+  function selectedKind() {
+    const checked = document.querySelector('input[name="moneyKind"]:checked');
+    return checked ? checked.value : 'Income';
+  }
+
+  // Chips, the "Other" box and the person list follow the kind.
+  function setupMoneyFields() {
+    const kind = selectedKind();
+    const cfg = MONEY_KINDS[kind];
+    $('typeHint').textContent = MONEY_HINTS[kind];
+    $('moneyCatField').hidden = !cfg.label;
+    $('moneyCatLabel').textContent = cfg.label;
+    const picker = $('moneyPicker');
+    const keep = (document.querySelector('input[name="moneyCat"]:checked') || {}).value;
+    picker.innerHTML = '';
+    picker.hidden = !cfg.chips;
+    (cfg.chips || []).forEach((c, i) => {
+      const id = 'mc' + i;
+      const input = document.createElement('input');
+      Object.assign(input, { type: 'radio', name: 'moneyCat', id, value: c });
+      input.checked = c === keep || (!cfg.chips.includes(keep) && i === 0);
+      const label = document.createElement('label');
+      label.htmlFor = id;
+      label.textContent = c;
+      picker.append(input, label);
+    });
+    updateMoneyOther();
+    const person = $('moneyPerson');
+    const was = person.value || store.get('moneyPerson', 'V');
+    const options = [['V', 'V'], ['K', 'K']].concat(cfg.both ? [['Both', 'Both (half each)']] : []);
+    person.innerHTML = '';
+    for (const [value, label] of options) person.add(new Option(label, value));
+    person.value = kind === 'Loan payment' ? 'V' : options.some(([v]) => v === was) ? was : 'V';
+    $('amount').placeholder = kind === 'Income' ? '3,138.18' : '0.00';
+    $('notes').placeholder = kind === 'Income' ? 'After 401(K) and insurance' : 'Optional';
+  }
+
+  function updateMoneyOther() {
+    const cfg = MONEY_KINDS[selectedKind()];
+    const chip = (document.querySelector('input[name="moneyCat"]:checked') || {}).value;
+    const show = !!cfg.label && (!cfg.chips || chip === 'Other');
+    $('moneyOther').hidden = !show;
+    $('moneyOther').placeholder = cfg.otherHint || '';
+  }
+  $('kindSeg').addEventListener('change', setupMoneyFields);
+  $('moneyPicker').addEventListener('change', updateMoneyOther);
+  $('moneyPerson').addEventListener('change', () => store.set('moneyPerson', $('moneyPerson').value));
+
+  function moneyCategory() {
+    const cfg = MONEY_KINDS[selectedKind()];
+    if (!cfg.label) return '';
+    const chip = (document.querySelector('input[name="moneyCat"]:checked') || {}).value;
+    const typed = $('moneyOther').value.trim();
+    if (!cfg.chips) return typed;
+    return chip === 'Other' ? typed || 'Other' : chip || '';
+  }
+
+  async function saveMoney(date) {
+    const kind = selectedKind();
+    const amount = parseAmount($('amount').value);
+    if (amount === null || amount <= 0) return markInvalid($('amount'), 'Enter a valid amount.');
+    const entry = { id: uuid(), date, kind, category: moneyCategory(), amount, person: $('moneyPerson').value, notes: $('notes').value.trim() };
+    enqueue({ op: 'add', table: 'funds', entry });
+
+    const keepPerson = entry.person;
+    $('expenseForm').reset();
+    clearInvalid($('expenseForm'));
+    $('date').value = today();
+    $('paidBy').value = store.get('paidBy', 'V');
+    $('typeMoney').checked = true; // stay on Funds, same kind
+    document.querySelector(`input[name="moneyKind"][value="${kind}"]`).checked = true;
+    updateTypeHint();
+    $('moneyPerson').value = keepPerson;
+
+    $('saveBtn').disabled = true;
+    const status = await sync();
+    $('saveBtn').disabled = false;
+    const f = fundsEstimate();
+    const label = entry.category || KIND_TAGS[kind];
+    let extra = '';
+    if (kind === 'Use savings') extra = ` · ${money(f.rolling.total)} savings left`;
+    else if (kind === 'Investment' && f.goal) extra = ` · goal ${f.goal.percent}% done`;
+    else if (kind === 'Loan payment' && f.loan) extra = ` · ${money(f.loan.remaining)} left on the loan`;
+    if (kind !== 'Use savings' && f.now && String(date).slice(0, 7) === currentMonth()) extra += ` · ${money(f.now.left.total)} left this month`;
+    report(status, `Saved ✓ ${label} ${money(amount)}${extra}`);
+  }
+
+  // ---- Live estimate: what the sheet last reported plus every change not synced yet
+  // (Funds entries and new expenses), so the picture updates the moment something is saved.
+  const trio = () => ({ V: 0, K: 0, total: 0 });
+  const blankNow = (month) => ({
+    month, label: monthName(month + '-01') + ' ' + month.slice(0, 4), income: trio(), joint: 0, fixed: 0, personal: { V: 0, K: 0 },
+    sonata: trio(), invest: trio(), loan: trio(), out: trio(), left: trio(), used: trio(), rollingBefore: trio(), rollingAfter: trio(),
+  });
+  const shares = (who, amt) => (who === 'Both' || who === 'Joint' ? { V: amt / 2, K: amt / 2 } : who === 'K' ? { V: 0, K: amt } : { V: amt, K: 0 });
+  const bump = (o, who, amt) => { const s = shares(who, amt); o.V += s.V; o.K += s.K; if ('total' in o) o.total += amt; };
+  const monthsBetween = (a, b) => (+b.slice(0, 4) - +a.slice(0, 4)) * 12 + (+b.slice(5, 7) - +a.slice(5, 7));
+  const ymLabel = (ym) => (ym ? monthName(ym + '-01') + ' ' + ym.slice(0, 4) : '');
+  const usd0 = (n) => '$' + Math.round(n).toLocaleString('en-US');
+
+  function fundsEstimate() {
+    const st = getState() || {};
+    const month = currentMonth();
+    const base = st.funds ? JSON.parse(JSON.stringify(st.funds)) : null;
+    let f;
+    if (base && base.month === month && base.now) {
+      f = base;
+    } else {
+      // Nothing synced for this month yet (or a new month began): last month's left joins rolling savings.
+      const prev = base && base.now;
+      f = { month, now: blankNow(month), history: base ? base.history || [] : [], goal: base ? base.goal : null, loan: base ? base.loan : null,
+        rolling: prev ? { ...prev.rollingAfter } : base ? { ...base.rolling } : trio(), recent: base ? base.recent || [] : [] };
+      if (f.goal) f.goal.thisMonth = trio();
+      if (f.loan) f.loan.thisMonth = 0;
+    }
+    const n = f.now;
+    let changed = false;
+    // Spending in this month lowers what is left; spending in an earlier (tracked) month lowers rolling savings.
+    const spend = (date, cat, who, amt) => {
+      const m = String(date).slice(0, 7);
+      if (m > month || (f.history.length && m < f.history[0].month)) return;
+      changed = true;
+      if (m < month) { bump(f.rolling, who, -amt); return; }
+      if (cat === 'joint' || cat === 'fixed') n[cat] += amt;
+      else if (cat === 'personal') bump(n.personal, who, amt);
+      else bump(n[cat], who, amt);
+      bump(n.out, who, amt);
+      bump(n.left, who, -amt);
+    };
+    const applyFund = (e, sign) => {
+      const amt = sign * e.amount;
+      const m = String(e.date).slice(0, 7);
+      changed = true;
+      if (e.kind === 'Income' && m <= month) {
+        if (m === month) { bump(n.income, e.person, amt); bump(n.left, e.person, amt); } else bump(f.rolling, e.person, amt);
+      }
+      if (e.kind === 'Investment') spend(e.date, 'invest', e.person, amt);
+      if (e.kind === 'Loan payment') spend(e.date, 'loan', e.person, amt);
+      if (e.kind === 'Use savings' && m <= month) { bump(f.rolling, e.person, -amt); bump(n.used, e.person, amt); }
+      if ((e.kind === 'Investment' || e.kind === 'Prior investment') && f.goal) bump(f.goal.invested, e.person, amt);
+      if (e.kind === 'Loan payment' && f.loan && e.date >= f.loan.since) f.loan.paid += amt;
+      if (e.kind === 'Goal' && sign > 0) {
+        f.goal = f.goal || { invested: trio(), avg: trio(), suggestions: [] };
+        Object.assign(f.goal, { target: e.amount, deadline: e.category, deadlineLabel: ymLabel(e.category), pending: true });
+      }
+      if (e.kind === 'Loan balance' && sign > 0) {
+        f.loan = { balance: e.amount, since: e.date, paid: 0, thisMonth: 0, avgPayment: f.loan ? f.loan.avgPayment : 0, payoffLabel: '' };
+      }
+    };
+    const fundRecent = f.recent || [];
+    const mainRecent = st.recent || [];
+    const carRecent = (st.car && st.car.recent) || [];
+    for (const op of getQueue()) {
+      const list = op.table === 'funds' ? fundRecent : op.table === 'car' ? carRecent : mainRecent;
+      const e = op.op === 'add' ? op.entry : list.find((r) => r.id === op.id);
+      if (!e) continue;
+      const sign = op.op === 'add' ? 1 : -1;
+      if (op.table === 'funds') { applyFund(e, sign); continue; }
+      if (op.table === 'car') {
+        if (e.category !== 'Settlement') spend(e.date, 'sonata', e.expenseFor || e.paidBy, sign * e.amount);
+        continue;
+      }
+      if (e.type === 'Joint' || e.type === 'Fixed') spend(e.date, e.type.toLowerCase(), 'Both', sign * e.amount);
+      if (e.type === 'Personal') spend(e.date, 'personal', e.expenseFor || e.paidBy, sign * e.amount);
+    }
+    const r2all = (o) => { for (const k of Object.keys(o)) o[k] = round2(o[k]); };
+    ['income', 'personal', 'sonata', 'invest', 'loan', 'out', 'left', 'used'].forEach((k) => r2all(n[k]));
+    n.joint = round2(n.joint); n.fixed = round2(n.fixed);
+    r2all(f.rolling);
+    if (f.goal) {
+      const g = f.goal;
+      r2all(g.invested);
+      g.monthsLeft = Math.max(0, monthsBetween(month, g.deadline) + 1);
+      const half = g.target / 2;
+      g.togo = { V: round2(Math.max(0, half - g.invested.V)), K: round2(Math.max(0, half - g.invested.K)) };
+      g.togo.total = round2(g.togo.V + g.togo.K);
+      const div = g.monthsLeft || 1;
+      g.need = { V: round2(g.togo.V / div), K: round2(g.togo.K / div) };
+      g.need.total = round2(g.need.V + g.need.K);
+      g.percent = g.target ? Math.min(100, round2((g.invested.total / g.target) * 100)) : 0;
+      g.thisMonth = n.invest;
+      if (changed || base === null || (base && base.month !== month)) {
+        // The monthly target changes with every entry; the rest of the suggestions refresh on sync.
+        const first = g.togo.total <= 0 ? 'Goal reached. Set a new goal to keep going.'
+          : g.monthsLeft > 0
+            ? `Invest ${usd0(g.need.total)} a month together (V ${usd0(g.need.V)}, K ${usd0(g.need.K)}) for the next ${g.monthsLeft} month${g.monthsLeft === 1 ? '' : 's'} to reach ${usd0(g.target)} by ${g.deadlineLabel}.`
+            : `The deadline has passed with ${usd0(g.togo.total)} to go. Set a new deadline to get a monthly target.`;
+        g.suggestions = [first, ...(g.suggestions || []).slice(1)];
+      }
+    }
+    if (f.loan) {
+      f.loan.paid = round2(f.loan.paid);
+      f.loan.remaining = round2(Math.max(0, f.loan.balance - f.loan.paid));
+      if (f.loan.remaining <= 0) f.loan.payoffLabel = 'Paid off';
+    }
+    return f;
+  }
+
+  function cell(tr, text, cls, tag) {
+    const td = document.createElement(tag || 'td');
+    td.textContent = text;
+    if (tag === 'th') td.scope = 'row';
+    if (cls) td.className = cls;
+    tr.appendChild(td);
+    return td;
+  }
+  const tone = (v) => (v <= -0.01 ? 'neg' : v >= 0.01 ? 'pos' : '');
+
+  function renderMoney() {
+    const f = fundsEstimate();
+    const n = f.now;
+    const ready = !!(getState() || {}).funds || getQueue().some((op) => op.table === 'funds');
+    $('mMonthTitle').textContent = `${monthName(f.month + '-01')} money`;
+    $('mLeft').textContent = ready ? money(Math.abs(n.left.total)) : '—';
+    $('mLeft').classList.toggle('neg', n.left.total < 0);
+    $('mLeftWord').textContent = n.left.total < 0 ? 'short this month' : 'left this month';
+
+    const half = (v) => round2(v / 2);
+    const rows = [
+      ['Income', n.income.total, n.income.V, n.income.K],
+      ['Joint (half each)', n.joint, half(n.joint), half(n.joint)],
+      ['Fixed (half each)', n.fixed, half(n.fixed), half(n.fixed)],
+      ['Personal', round2(n.personal.V + n.personal.K), n.personal.V, n.personal.K],
+      ['Sonata', n.sonata.total, n.sonata.V, n.sonata.K],
+      ['Invested', n.invest.total, n.invest.V, n.invest.K],
+      ['Loan', n.loan.total, n.loan.V, n.loan.K],
+      ['Total out', n.out.total, n.out.V, n.out.K, 'total'],
+      ['Left', n.left.total, n.left.V, n.left.K, 'left-row'],
+    ];
+    const body = $('mTable');
+    body.innerHTML = '';
+    for (const [name, c, v, k, cls] of rows) {
+      const tr = document.createElement('tr');
+      if (cls) tr.className = cls;
+      cell(tr, name, '', 'th');
+      for (const x of [c, v, k]) cell(tr, money(x), cls === 'left-row' ? tone(x) : '');
+      body.appendChild(tr);
+    }
+
+    // Rolling savings
+    $('mRolling').textContent = money(f.rolling.total);
+    $('mRolling').classList.toggle('neg', f.rolling.total < 0);
+    $('mRollV').textContent = money(f.rolling.V);
+    $('mRollK').textContent = money(f.rolling.K);
+    $('mRollAfter').textContent = money(round2(f.rolling.total + n.left.total));
+    $('mRollNote').textContent = (n.used.total ? `${money(n.used.total)} used this month. ` : '') +
+      `Earlier months' leftovers, kept apart from this month. ${monthName(f.month + '-01')}'s left joins it on the 1st. To spend some, pick Funds > Savings below.`;
+
+    // Goal
+    const g = f.goal;
+    $('mGoalBody').hidden = !g;
+    $('mGoalEmpty').hidden = !!g;
+    $('goalBtn').textContent = g ? 'Edit goal' : 'Set goal';
+    if (g) {
+      $('mGoalTitle').textContent = `Goal: ${usd0(g.target)} by ${g.deadlineLabel}`;
+      $('mGoalPct').textContent = `${g.percent}%`;
+      $('mGoalOf').textContent = `${money(g.invested.total)} of ${usd0(g.target)}`;
+      $('mGoalFill').style.width = g.percent + '%';
+      $('mGoalFill').parentElement.setAttribute('aria-valuenow', String(Math.round(g.percent)));
+      const gb = $('mGoalTable');
+      gb.innerHTML = '';
+      for (const [name, o] of [['Invested', g.invested], ['To go', g.togo], ['Needed / month', g.need], ['This month', g.thisMonth || trio()]]) {
+        const tr = document.createElement('tr');
+        cell(tr, name, '', 'th');
+        for (const x of [o.total, o.V, o.K]) cell(tr, usd0(x)); // whole dollars: six figures fit on a phone
+        gb.appendChild(tr);
+      }
+      const pace = $('mGoalPace');
+      const tm = (g.thisMonth || trio()).total;
+      if (g.togo.total <= 0) { pace.textContent = 'Goal reached'; pace.className = 'status cleared'; }
+      else if (!g.monthsLeft) { pace.textContent = `Deadline passed · ${usd0(g.togo.total)} to go`; pace.className = 'status open'; }
+      else {
+        const gap = round2(g.need.total - tm);
+        pace.textContent = `${g.monthsLeft} month${g.monthsLeft === 1 ? '' : 's'} left (incl. ${monthName(f.month + '-01')}) · ` +
+          (gap > 0 ? `${money(gap)} more to invest this month to stay on pace` : 'On pace this month');
+        pace.className = 'status ' + (gap > 0 ? 'open' : 'cleared');
+      }
+      const ul = $('mSuggest');
+      ul.innerHTML = '';
+      for (const t of g.suggestions || []) { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); }
+    } else {
+      $('mGoalTitle').textContent = 'Savings goal';
+    }
+
+    // Loan
+    const l = f.loan;
+    $('mLoanBody').hidden = !l;
+    $('mLoanEmpty').hidden = !!l;
+    $('loanBtn').textContent = l ? 'Update loan balance' : 'Set loan balance';
+    if (l) {
+      $('mLoanLeft').textContent = money(l.remaining);
+      $('mLoanPaid').textContent = money(l.paid);
+      $('mLoanAvg').textContent = l.avgPayment ? money(l.avgPayment) : '—';
+      $('mLoanPayoff').textContent = l.payoffLabel || '…';
+      $('mLoanNote').textContent = `Balance ${money(l.balance)} as of ${prettyDate(l.since)}` +
+        (l.monthsToPay ? ` · about ${l.monthsToPay} more payment${l.monthsToPay === 1 ? '' : 's'} at the recent average` : '') + '.';
+    }
+
+    // Month by month (latest first; this month from the live estimate)
+    const hb = $('mHistory');
+    hb.innerHTML = '';
+    const hist = f.history.filter((h) => h.month !== f.month).concat(ready ? [{ ...n, month: f.month, rollingAfter: { total: round2(f.rolling.total + n.left.total) } }] : []);
+    if (!hist.length) {
+      const tr = document.createElement('tr');
+      const td = cell(tr, 'Log income to start the monthly picture.', 'muted');
+      td.colSpan = 5;
+      hb.appendChild(tr);
+    }
+    for (const h of hist.slice(-12).reverse()) {
+      const tr = document.createElement('tr');
+      if (h.month === f.month) tr.className = 'current';
+      cell(tr, shortMonth(h.month) + (h.month.slice(0, 4) !== f.month.slice(0, 4) ? ' ' + h.month.slice(2, 4) : ''));
+      cell(tr, usd0(h.income.total));
+      cell(tr, usd0(h.out.total));
+      cell(tr, usd0(h.left.total), tone(h.left.total));
+      cell(tr, usd0(h.rollingAfter.total), tone(h.rollingAfter.total));
+      hb.appendChild(tr);
+    }
+  }
+
+  function renderMoneyRecent() {
+    const f = (getState() || {}).funds;
+    const queue = getQueue().filter((op) => op.table === 'funds');
+    const deleting = new Set(queue.filter((op) => op.op === 'delete').map((op) => op.id));
+    const pending = queue.filter((op) => op.op === 'add').map((op) => ({ ...op.entry, pending: true })).reverse();
+    const rows = [...pending, ...((f && f.recent) || []).filter((r) => !deleting.has(r.id))];
+    const list = $('recentList');
+    list.innerHTML = '';
+    if (!rows.length) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'Nothing yet.';
+      list.appendChild(li);
+    }
+    for (const r of rows) {
+      const li = document.createElement('li');
+      li.className = [KIND_CLASS[r.kind] || '', r.pending ? 'pending' : ''].filter(Boolean).join(' ');
+      const body = document.createElement('div');
+      body.className = 'body';
+      const top = document.createElement('div');
+      top.className = 'top';
+      const name = document.createElement('span');
+      name.textContent = r.kind === 'Goal' ? `Goal by ${ymLabel(r.category)}` : r.category || KIND_TAGS[r.kind];
+      const amt = document.createElement('span');
+      amt.textContent = (r.kind === 'Income' ? '+' : '') + money(r.amount);
+      top.append(name, amt);
+      const sub = document.createElement('div');
+      sub.className = 'sub';
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = KIND_TAGS[r.kind] || r.kind;
+      const parts = [prettyDate(r.date), r.person === 'Both' ? 'V + K' : r.person, r.notes];
+      sub.append(tag, document.createTextNode(parts.filter(Boolean).join(' · ')));
+      body.append(top, sub);
+      li.appendChild(body);
+      if (r.id) {
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'del';
+        del.setAttribute('aria-label', `Delete ${name.textContent}`);
+        del.textContent = '×';
+        del.addEventListener('click', () => removeEntry(r, 'funds'));
+        li.appendChild(del);
+      }
+      list.appendChild(li);
+    }
+    const qn = getQueue().length;
+    $('syncNote').textContent = qn ? `${qn} waiting to sync` : '';
+  }
+
+  // ---- Goal dialog (target, deadline, investments from before tracking)
+  const goalDialog = $('goalDialog');
+  // From the Fam. tab: V 401(K) 243.60; K 401(K) 225 + India 4,100 + 2,084.
+  const PRIOR_DEFAULT = { V: 243.6, K: 6409 };
+  const hasPrior = () => {
+    const f = (getState() || {}).funds;
+    return !!(f && f.goal) || getQueue().some((op) => op.table === 'funds' && op.op === 'add' && (op.entry.kind === 'Prior investment' || op.entry.kind === 'Goal'));
+  };
+  $('goalBtn').addEventListener('click', () => {
+    $('goalForm').reset();
+    clearInvalid($('goalForm'));
+    const g = fundsEstimate().goal;
+    $('goalTarget').value = g ? String(g.target) : '150000';
+    $('goalDeadline').value = g ? g.deadline : '2027-07';
+    const first = !hasPrior();
+    $('priorFields').hidden = !first;
+    if (first) { $('priorV').value = PRIOR_DEFAULT.V.toFixed(2); $('priorK').value = PRIOR_DEFAULT.K.toFixed(2); }
+    goalDialog.showModal();
+  });
+  for (const id of ['goalTarget', 'goalDeadline', 'priorV', 'priorK', 'loanBalance', 'loanDate']) {
+    $(id).addEventListener('input', () => $(id).classList.remove('invalid'));
+  }
+  $('goalForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (e.submitter && e.submitter.value === 'cancel') return goalDialog.close();
+    const target = parseAmount($('goalTarget').value);
+    const deadline = $('goalDeadline').value;
+    if (target === null || target <= 0) return $('goalTarget').classList.add('invalid');
+    if (!/^\d{4}-\d{2}$/.test(deadline) || deadline < currentMonth()) return $('goalDeadline').classList.add('invalid');
+    const prior = {};
+    if (!$('priorFields').hidden) {
+      for (const who of ['V', 'K']) {
+        const raw = $('prior' + who).value.trim();
+        const v = raw === '' ? 0 : parseAmount(raw);
+        if (v === null || v < 0) return $('prior' + who).classList.add('invalid');
+        prior[who] = v;
+      }
+    }
+    goalDialog.close();
+    const date = today();
+    for (const who of ['V', 'K']) {
+      if (prior[who] > 0) enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date, kind: 'Prior investment', category: 'Before tracking', amount: prior[who], person: who, notes: 'From the Fam. tab' } });
+    }
+    enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date, kind: 'Goal', category: deadline, amount: target, person: 'Both', notes: '' } });
+    const status = await sync();
+    const g = fundsEstimate().goal;
+    report(status, `Goal set ✓ ${usd0(target)} by ${ymLabel(deadline)}` + (g && g.monthsLeft ? ` · ${usd0(g.need.total)} a month` : ''));
+  });
+
+  // ---- Loan balance dialog
+  const loanDialog = $('loanDialog');
+  $('loanBtn').addEventListener('click', () => {
+    $('loanForm').reset();
+    clearInvalid($('loanForm'));
+    const l = fundsEstimate().loan;
+    if (l) $('loanBalance').value = l.remaining.toFixed(2);
+    $('loanDate').value = today();
+    loanDialog.showModal();
+  });
+  $('loanForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (e.submitter && e.submitter.value === 'cancel') return loanDialog.close();
+    const amount = parseAmount($('loanBalance').value);
+    if (amount === null || amount < 0) return $('loanBalance').classList.add('invalid');
+    if (!$('loanDate').value) return $('loanDate').classList.add('invalid');
+    loanDialog.close();
+    enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date: $('loanDate').value, kind: 'Loan balance', category: 'Loan', amount, person: 'V', notes: '' } });
+    const status = await sync();
+    report(status, `Loan balance set ✓ ${money(amount)}`);
   });
 
   // ---------- Settings
@@ -1395,6 +1870,7 @@
     if (document.visibilityState !== 'visible') return;
     // The app can stay open in the background for days; keep the date on today if nothing is typed yet.
     if (!$('category').value && !$('amount').value) $('date').value = today();
+    if (isMoneyMode()) render(); // a new month moves this month's left into rolling savings
     if (getSettings()) sync();
     if (swReg) swReg.update().catch(() => {});
   });

@@ -225,7 +225,7 @@ input.invalid { border-color: var(--err); }
 /* Joint / Personal switch */
 .seg {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: var(--field);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -245,6 +245,33 @@ input.invalid { border-color: var(--err); }
 .seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 1px; }
 .hint { margin-top: 6px; }
 .seg.two { grid-template-columns: 1fr 1fr; }
+#typeSeg label { font-size: 14px; }
+#kindSeg { grid-template-columns: repeat(4, 1fr); }
+
+/* Funds */
+.money-table { margin-top: 10px; }
+.money-table th[scope="row"] { font-weight: 600; }
+.money-table td, .history-table td { font-size: 13.5px; letter-spacing: -0.2px; }
+.money-table th[scope="col"]:first-child { width: 29%; }
+.money-table th[scope="row"] { font-size: 13.5px; }
+.money-table tr.total th, .money-table tr.total td { border-top: 2px solid var(--border); }
+.money-table tr.left-row th, .money-table tr.left-row td { font-size: 14px; font-weight: 800; }
+.history-table th, .history-table td { padding-left: 2px; padding-right: 2px; }
+.history-table tr.current td { color: var(--accent); }
+.history-table .pos, .money-table .pos { color: var(--pos); }
+.history-table .neg, .money-table .neg { color: var(--err); }
+.goal-card { border-left: 5px solid #a855f7; }
+.goal-card .meter { margin-top: 8px; }
+.goal-card .meter-fill:not(.warn):not(.over) { background: #a855f7; }
+.loan-card { border-left: 5px solid #f87171; }
+.suggest { margin: 8px 0 0; padding-left: 18px; font-size: 14px; }
+.suggest li { margin: 4px 0; }
+.money-chips input:checked + label { background: #d8b4fe; border-color: #9333ea; }
+.c-income { --row: #bbf7d0; }
+.c-invest { --row: #e9d5ff; }
+.c-loan { --row: #fecaca; }
+.c-savings { --row: #fef08a; }
+.c-goal { --row: #bae6fd; }
 label.check { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 500; color: var(--text); margin-bottom: 14px; }
 label.check input { width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; flex: none; -webkit-appearance: checkbox; appearance: auto; accent-color: var(--accent); }
 .fuel-preview.warn { border-color: var(--warn); }

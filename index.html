@@ -175,6 +175,85 @@
       </section>
     </div>
 
+    <div id="moneyDash" hidden>
+      <section class="card balance-card" aria-labelledby="mMonthTitle">
+        <div id="mMonthTitle" class="eyebrow">This month</div>
+        <div class="left-line">
+          <span id="mLeft" class="balance-amount">—</span>
+          <span id="mLeftWord" class="left-word">left this month</span>
+        </div>
+        <table class="split money-table">
+          <thead><tr><th scope="col"></th><th scope="col">Combined</th><th scope="col">V</th><th scope="col">K</th></tr></thead>
+          <tbody id="mTable"></tbody>
+        </table>
+        <div id="mNote" class="muted">Shared costs (Joint, Fixed, joint Sonata) count half each. Personal, own Sonata turns, investments and the loan go to their owner. Settlements are ignored.</div>
+      </section>
+
+      <section class="card" aria-labelledby="mRollTitle">
+        <div id="mRollTitle" class="eyebrow">Rolling savings</div>
+        <div class="left-line">
+          <span id="mRolling" class="balance-amount">—</span>
+          <span class="left-word">saved</span>
+        </div>
+        <div class="stats">
+          <div><span class="stat-label">V</span><span id="mRollV">—</span></div>
+          <div><span class="stat-label">K</span><span id="mRollK">—</span></div>
+          <div><span class="stat-label">After this month</span><span id="mRollAfter">—</span></div>
+        </div>
+        <div id="mRollNote" class="pace">Leftovers from earlier months, kept apart from this month. To spend some, pick Funds &gt; Savings below.</div>
+      </section>
+
+      <section class="card goal-card" aria-labelledby="mGoalTitle">
+        <div id="mGoalTitle" class="eyebrow">Savings goal</div>
+        <div id="mGoalBody" hidden>
+          <div class="left-line">
+            <span id="mGoalPct" class="balance-amount">—</span>
+            <span id="mGoalOf" class="left-word"></span>
+          </div>
+          <div class="meter" role="progressbar" aria-label="Goal reached" aria-valuemin="0" aria-valuemax="100">
+            <div id="mGoalFill" class="meter-fill"></div>
+          </div>
+          <table class="split money-table">
+            <thead><tr><th scope="col"></th><th scope="col">Combined</th><th scope="col">V</th><th scope="col">K</th></tr></thead>
+            <tbody id="mGoalTable"></tbody>
+          </table>
+          <div id="mGoalPace" class="status"></div>
+          <ul id="mSuggest" class="suggest"></ul>
+        </div>
+        <div id="mGoalEmpty" class="pace">Set a target and a deadline. Investments (401(K), India, USA...) count toward it, split equally between V and K.</div>
+        <div class="row"><button type="button" id="goalBtn" class="full">Set goal</button></div>
+      </section>
+
+      <section class="card loan-card" aria-labelledby="mLoanTitle">
+        <div id="mLoanTitle" class="eyebrow">V's loan</div>
+        <div id="mLoanBody" hidden>
+          <div class="left-line">
+            <span id="mLoanLeft" class="balance-amount">—</span>
+            <span class="left-word">remaining</span>
+          </div>
+          <div class="stats">
+            <div><span class="stat-label">Paid since</span><span id="mLoanPaid">—</span></div>
+            <div><span class="stat-label">Avg / month</span><span id="mLoanAvg">—</span></div>
+            <div><span class="stat-label">Paid off by</span><span id="mLoanPayoff">—</span></div>
+          </div>
+          <div id="mLoanNote" class="pace"></div>
+        </div>
+        <div id="mLoanEmpty" class="pace">Enter the loan balance once. Each Loan payment then counts it down and estimates the payoff month.</div>
+        <div class="row"><button type="button" id="loanBtn" class="full">Set loan balance</button></div>
+      </section>
+
+      <section class="card" aria-labelledby="mHistTitle">
+        <div class="section-head">
+          <h2 id="mHistTitle">Month by month</h2>
+          <span class="muted">Combined</span>
+        </div>
+        <table class="split history-table">
+          <thead><tr><th scope="col">Month</th><th scope="col">Income</th><th scope="col">Out</th><th scope="col">Left</th><th scope="col">Rolling</th></tr></thead>
+          <tbody id="mHistory"></tbody>
+        </table>
+      </section>
+    </div>
+
     <form id="expenseForm" class="card" autocomplete="off" novalidate>
       <label>Date
         <input type="date" id="date" required>
@@ -191,6 +270,8 @@
           <label for="typePersonal">Personal</label>
           <input type="radio" name="type" id="typeCar" value="Car">
           <label for="typeCar">Sonata</label>
+          <input type="radio" name="type" id="typeMoney" value="Funds">
+          <label for="typeMoney">Funds</label>
         </div>
         <div id="typeHint" class="muted hint"></div>
       </fieldset>
@@ -243,6 +324,30 @@
           </label>
           <div id="fuelPreview" class="fuel-preview" hidden></div>
         </div>
+      </div>
+
+      <div id="moneyFields" hidden>
+        <fieldset class="seg-field">
+          <legend>Kind</legend>
+          <div class="seg" id="kindSeg">
+            <input type="radio" name="moneyKind" id="mkIncome" value="Income" checked>
+            <label for="mkIncome">Income</label>
+            <input type="radio" name="moneyKind" id="mkInvest" value="Investment">
+            <label for="mkInvest">Invest</label>
+            <input type="radio" name="moneyKind" id="mkLoan" value="Loan payment">
+            <label for="mkLoan">Loan</label>
+            <input type="radio" name="moneyKind" id="mkSavings" value="Use savings">
+            <label for="mkSavings">Savings</label>
+          </div>
+        </fieldset>
+        <div class="field" id="moneyCatField">
+          <span id="moneyCatLabel" class="field-label">Source</span>
+          <div id="moneyPicker" class="chips money-chips" role="radiogroup" aria-labelledby="moneyCatLabel"></div>
+          <input type="text" id="moneyOther" aria-labelledby="moneyCatLabel" autocapitalize="words" autocomplete="off" hidden>
+        </div>
+        <label>Person
+          <select id="moneyPerson"></select>
+        </label>
       </div>
 
       <div class="field" id="categoryField">
@@ -384,6 +489,67 @@
       <label>Notes
         <input type="text" id="settleNotes" placeholder="Optional">
       </label>
+      <div class="row end">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="goalDialog">
+    <form method="dialog" id="goalForm" novalidate>
+      <h2>Savings goal</h2>
+      <p class="muted">Investments (401(K), India, USA...) count toward the goal, split equally: each of you aims for half. Rolling savings stay separate.</p>
+      <div class="grid2">
+        <label>Target ($)
+          <div class="amount">
+            <span>$</span>
+            <input type="text" id="goalTarget" inputmode="decimal" placeholder="150,000">
+          </div>
+        </label>
+        <label>Deadline
+          <input type="month" id="goalDeadline">
+        </label>
+      </div>
+      <div id="priorFields">
+        <p class="muted">Already invested before tracking (from the Fam. tab). Added once and counted toward the goal.</p>
+        <div class="grid2">
+          <label>V ($)
+            <div class="amount">
+              <span>$</span>
+              <input type="text" id="priorV" inputmode="decimal" placeholder="0.00">
+            </div>
+          </label>
+          <label>K ($)
+            <div class="amount">
+              <span>$</span>
+              <input type="text" id="priorK" inputmode="decimal" placeholder="0.00">
+            </div>
+          </label>
+        </div>
+      </div>
+      <div class="row end">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="loanDialog">
+    <form method="dialog" id="loanForm" novalidate>
+      <h2>Loan balance</h2>
+      <p class="muted">What is still owed on V's loan as of a date. Loan payments logged after that date count it down. Enter it again any time to correct it.</p>
+      <div class="grid2">
+        <label>Balance ($)
+          <div class="amount">
+            <span>$</span>
+            <input type="text" id="loanBalance" inputmode="decimal" placeholder="0.00">
+          </div>
+        </label>
+        <label>As of
+          <input type="date" id="loanDate">
+        </label>
+      </div>
       <div class="row end">
         <button value="cancel" formnovalidate>Cancel</button>
         <button value="save" class="primary">Save</button>
