@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 22; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 23; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
@@ -11,7 +11,7 @@
     Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
     Personal: "Personal: one person's own expense, not in the budget. If it goes on the other person's card, they are owed the full amount.",
     Car: "Sonata: car costs and fuel, saved to the Sonata tab. Expense for: whose turn it is (V or K), or Joint to split 50/50.",
-    Funds: 'Funds: what comes in and what goes out (income, investments, loan payments, savings), saved to the Funds tab with its overview.',
+    Funds: 'Funds: what comes in and what goes out (income, 401(K), investments, loan payments, savings), saved to the Funds tab with its overview.',
   };
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
@@ -27,7 +27,7 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
-    if (op.table === 'funds') return 20;
+    if (op.table === 'funds') return op.op === 'add' && op.entry.kind === '401(K)' ? 21 : 20;
     if (op.table === 'car') return op.op !== 'add' ? 9 : op.entry.category === 'Settlement' ? 18 : 15;
     if (op.op !== 'add') return 0;
     if (op.entry.type === 'Settlement') return 18;
@@ -1409,20 +1409,22 @@
   const isMoneyMode = () => selectedType() === 'Funds';
   const MONEY_KINDS = {
     'Income': { label: 'Source', chips: () => ['Salary', 'Tax refund', 'Bonus', 'Other'], persons: ['V', 'K', 'Both'], otherHint: 'Where it came from' },
-    'Investment': { label: 'Where', chips: () => ['401(K)', 'India', 'USA', 'Other'], persons: ['V', 'K'], fromLabel: 'From',
+    '401(K)': { label: '', chips: null, persons: ['V', 'K'] },
+    'Investment': { label: 'Where', chips: () => ['India', 'USA', 'Other'], persons: ['V', 'K'], fromLabel: 'From',
       from: [['Income', "This month's income"], ['Savings', 'Savings']], otherHint: 'Brokerage, HSA...' },
     'Loan payment': { label: 'Loan', chips: () => loanNames().concat(['Other']), persons: ['V', 'K', 'Both'], otherHint: 'Which loan (V education...)' },
     'Use savings': { label: 'What for', chips: null, persons: ['V', 'K', 'Both'], otherHint: 'Flight to India, laptop...' },
   };
   const MONEY_HINTS = {
     'Income': 'Income: in hand after 401(K), insurance and taxes (salary, tax refund, bonus). Both splits it half each.',
-    'Investment': 'Invest: money put away (401(K), India, USA). Counts toward the goal. From savings moves money kept in earlier months.',
+    '401(K)': '401(K): what the employer took from this paycheck before pay. Not part of income or savings; counts toward the goal. Starts at the last amount; change it when the contribution changes.',
+    'Investment': 'Invest: money you put away from pay (India, USA...). Counts toward the goal. From savings moves money kept in earlier months.',
     'Loan payment': 'Loan: what you sent toward a loan. Counts as spending for the month. Both splits it half each.',
     'Use savings': 'Savings: spend from savings kept in earlier months. Leaves this month alone.',
   };
-  const KIND_TAGS = { 'Income': 'Income', 'Investment': 'Invested', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
+  const KIND_TAGS = { 'Income': 'Income', '401(K)': '401(K)', 'Investment': 'Invested', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
     'Use surplus': 'Savings used', 'Prior investment': 'Invested before', 'Goal': 'Goal', 'Savings target': 'Savings target' };
-  const KIND_CLASS = { 'Income': 'c-income', 'Investment': 'c-invest', 'Prior investment': 'c-invest', 'Loan payment': 'c-loan',
+  const KIND_CLASS = { 'Income': 'c-income', '401(K)': 'c-k401', 'Investment': 'c-invest', 'Prior investment': 'c-invest', 'Loan payment': 'c-loan',
     'Use savings': 'c-surplus', 'Use surplus': 'c-surplus', 'Goal': 'c-goal', 'Savings target': 'c-goal' };
 
   const trio = () => ({ V: 0, K: 0, total: 0 });
@@ -1476,9 +1478,25 @@
       from.value = cfg.from.some(([v]) => v === prev) ? prev : cfg.from[0][0];
     }
     $('moneyGrid').classList.toggle('grid2', !!cfg.from);
-    $('amount').placeholder = kind === 'Income' ? '3,138.18' : '0.00';
+    prefill401();
+    $('amount').placeholder = kind === 'Income' ? '3,138.18' : kind === '401(K)' ? 'Per paycheck' : '0.00';
     $('notes').placeholder = kind === 'Income' ? 'After 401(K) and insurance' : 'Optional';
   }
+
+  // 401(K) starts at that person's last contribution (until the amount is typed over).
+  let k401Prefilled = false;
+  function prefill401() {
+    if (selectedKind() !== '401(K)') {
+      if (k401Prefilled) { $('amount').value = ''; k401Prefilled = false; }
+      return;
+    }
+    if ($('amount').value.trim() !== '' && !k401Prefilled) return;
+    const last = (fundsEstimate().k401Last || {})[$('moneyPerson').value];
+    $('amount').value = last ? last.toFixed(2) : '';
+    k401Prefilled = !!last;
+  }
+  $('moneyPerson').addEventListener('change', () => { if (selectedKind() === '401(K)') prefill401(); });
+  $('amount').addEventListener('input', () => { k401Prefilled = false; });
 
   function updateMoneyOther() {
     const cfg = MONEY_KINDS[selectedKind()];
@@ -1516,8 +1534,10 @@
     $('paidBy').value = store.get('paidBy', 'V');
     restoreType(view === 'Home' ? store.get('quickType', 'Funds') : 'Funds');
     document.querySelector(`input[name="moneyKind"][value="${kind}"]`).checked = true;
+    k401Prefilled = false;
     updateTypeHint();
     $('moneyPerson').value = entry.person;
+    if (kind === '401(K)') { k401Prefilled = true; prefill401(); }
     if (kind === 'Investment') $('moneyFrom').value = keepFrom;
 
     $('saveBtn').disabled = true;
@@ -1526,7 +1546,8 @@
     const f = fundsEstimate();
     let extra = '';
     if (kind === 'Use savings' || entry.from === 'Savings') extra = ` · ${money(f.available.total)} savings from earlier left`;
-    if (kind === 'Investment' && f.goal) extra += ` · goal ${f.goal.percent}% done`;
+    if ((kind === 'Investment' || kind === '401(K)') && f.goal) extra += ` · goal ${f.goal.percent}% done`;
+    if (kind === '401(K)') extra += ` · ${money(f.now.k401.total)} 401(K) this month`;
     if (String(date).slice(0, 7) === currentMonth()) extra += f.safe ? ` · ${money(f.safe.left.total)} safe to spend` : ` · ${money(f.now.savings.total)} savings this month`;
     report(status, `Saved ✓ ${category || KIND_TAGS[kind]} ${money(amount)}${extra}`);
     if (kind === 'Income' && category === 'Salary' && (entry.person === 'V' || entry.person === 'K') && status !== 'outdated') openPayday(entry);
@@ -1537,7 +1558,7 @@
   const blankNow = (month) => ({
     month, label: ymLabel(month), income: trio(), shared: trio(), personal: trio(), sonata: trio(), loan: trio(), spent: trio(),
     invest: trio(), savings: trio(), kept: trio(), rate: { V: null, K: null, total: null }, investSaved: trio(), used: trio(),
-    savedBefore: trio(), savedAfter: trio(), joint: 0, fixed: 0, sonataShared: 0, budgets: null,
+    savedBefore: trio(), savedAfter: trio(), joint: 0, fixed: 0, sonataShared: 0, budgets: null, k401: trio(), putAway: trio(),
   });
   const shares = (who, amt) => (who === 'Both' || who === 'Joint' ? { V: amt / 2, K: amt / 2 } : who === 'K' ? { V: 0, K: amt } : who === 'V' ? { V: amt, K: 0 } : { V: 0, K: 0 });
   const bump = (o, who, amt) => { const x = shares(who, amt); o.V += x.V; o.K += x.K; if ('total' in o) o.total += x.V + x.K; };
@@ -1558,10 +1579,14 @@
       f = { month, now: blankNow(month), history: base ? base.history || [] : [], goal: base ? base.goal : null, loans: base ? base.loans || [] : [],
         safe: base ? base.safe : null, savingsTarget: base ? base.savingsTarget : null, recent: base ? base.recent || [] : [],
         available: prev ? { ...prev.savedAfter } : trio(), loanUsual: base ? base.loanUsual : trio(), recap: base ? base.recap : null,
-        suggestions: base ? base.suggestions || [] : [], hasEntries: base ? base.hasEntries : false };
+        suggestions: base ? base.suggestions || [] : [], hasEntries: base ? base.hasEntries : false,
+        k401Total: base ? base.k401Total : null, k401Last: base ? base.k401Last : null };
       f.now.savedBefore = { ...f.available };
     }
     const n = f.now;
+    n.k401 = n.k401 || trio();
+    f.k401Total = f.k401Total ? { ...f.k401Total } : trio();
+    f.k401Last = f.k401Last ? { ...f.k401Last } : { V: null, K: null };
     let changed = false;
     const firstMonth = f.history.length ? f.history[0].month : month;
     // Spending this month lowers savings; spending in an earlier tracked month lowers savings carried over.
@@ -1591,7 +1616,12 @@
         else bump(f.available, e.person, -amt);
       }
       if ((e.kind === 'Use savings' || e.kind === 'Use surplus') && m <= month) { bump(f.available, e.person, -amt); if (m === month) bump(n.used, e.person, amt); }
-      if ((e.kind === 'Investment' || e.kind === 'Prior investment') && f.goal) bump(f.goal.invested, e.person, amt);
+      if ((e.kind === 'Investment' || e.kind === 'Prior investment' || e.kind === '401(K)') && f.goal) bump(f.goal.invested, e.person, amt);
+      if (e.kind === '401(K)') {
+        if (m === month) bump(n.k401, e.person, amt);
+        bump(f.k401Total, e.person, amt);
+        if (sign > 0 && (e.person === 'V' || e.person === 'K')) f.k401Last[e.person] = e.amount;
+      }
       if (e.kind === 'Loan payment') {
         spend(e.date, 'loan', e.person, amt);
         let l = (f.loans || []).find((x) => x.name.toLowerCase() === String(e.category).toLowerCase());
@@ -1615,7 +1645,9 @@
       if (e.type === 'Personal') spend(e.date, 'personal', e.expenseFor || e.paidBy, sign * e.amount);
     }
     const r2 = (o) => { if (!o) return o; for (const k of Object.keys(o)) if (typeof o[k] === 'number') o[k] = round2(o[k]); return o; };
-    ['income', 'shared', 'personal', 'sonata', 'loan', 'spent', 'invest', 'savings', 'kept', 'investSaved', 'used'].forEach((k) => { n[k] = r2(n[k] || trio()); });
+    ['income', 'shared', 'personal', 'sonata', 'loan', 'spent', 'invest', 'savings', 'kept', 'investSaved', 'used', 'k401'].forEach((k) => { n[k] = r2(n[k] || trio()); });
+    r2(f.k401Total);
+    n.putAway = r2({ V: n.k401.V + n.invest.V + n.investSaved.V, K: n.k401.K + n.invest.K + n.investSaved.K, total: n.k401.total + n.invest.total + n.investSaved.total });
     r2(f.available);
     for (const k of ['joint', 'fixed', 'sonataShared']) n[k] = round2(n[k]);
     const rateOf = (k, inc) => (inc > 0 ? round2((k / inc) * 100) : null);
@@ -1656,7 +1688,7 @@
       g.need = { V: round2(g.togo.V / div), K: round2(g.togo.K / div) };
       g.need.total = round2(g.need.V + g.need.K);
       g.percent = g.target ? Math.min(100, round2((g.invested.total / g.target) * 100)) : 0;
-      g.thisMonth = r2({ V: n.invest.V + n.investSaved.V, K: n.invest.K + n.investSaved.K, total: n.invest.total + n.investSaved.total });
+      g.thisMonth = { ...n.putAway };
       if (changed || !base || base.month !== month) {
         const first = g.togo.total <= 0 ? 'Goal reached. Set a new goal to keep going.'
           : g.monthsLeft > 0
@@ -1745,6 +1777,25 @@
       ['Savings', n.savings.V, n.savings.K, n.savings.total, 'left-row'],
       ['Kept (invested + savings)', n.rate.V, n.rate.K, n.rate.total, '', pctText],
     ]);
+    // 401(K)
+    $('mK401').textContent = money(n.k401.total);
+    $('mK401V').textContent = money(n.k401.V);
+    $('mK401K').textContent = money(n.k401.K);
+    $('mK401All').textContent = money(f.k401Total.total);
+    const kb = $('mK401Table');
+    kb.innerHTML = '';
+    const krows = f.history.filter((h) => h.month !== f.month && h.k401).concat([{ month: f.month, k401: n.k401 }]).slice(-6).reverse();
+    for (const h of krows) {
+      const tr = document.createElement('tr');
+      if (h.month === f.month) tr.className = 'current';
+      cell(tr, shortMonth(h.month) + (h.month.slice(0, 4) !== f.month.slice(0, 4) ? ' ' + h.month.slice(2, 4) : ''), '', 'th');
+      for (const x of [h.k401.V, h.k401.K, h.k401.total]) cell(tr, money(x));
+      kb.appendChild(tr);
+    }
+    const last = f.k401Last || {};
+    $('mK401Note').textContent = 'Taken by the employer before pay, so it is not in income or savings; it counts toward the goal.' +
+      (last.V || last.K ? ` Latest per paycheck: V ${last.V ? money(last.V) : '—'}, K ${last.K ? money(last.K) : '—'}.` : ' Log it per paycheck with 401(K) below.');
+
     const b = n.budgets;
     const anyBudget = b.jointLeft !== null || b.personalLeft.V !== null || b.personalLeft.K !== null;
     $('mFromCard').hidden = !anyBudget || !ready;
@@ -1953,6 +2004,9 @@
       tile('Funds', '#22c55e', 'Savings this month', money(f.now.savings.total), `${money(f.now.invest.total)} invested · ${pctText(f.now.rate.total)} of income kept`, f.now.savings.total < 0 ? 'neg' : '');
       tile('Funds', '#eab308', 'Savings from earlier', money(f.available.total), `Not decided yet · ${money(f.now.savedAfter.total)} after ${monthWord}`);
     }
+    if (f.now.k401.total > 0 || f.k401Total.total > 0) {
+      tile('Funds', '#8b5cf6', '401(K)', money(f.now.k401.total), `${monthWord} · V ${usd0(f.now.k401.V)}, K ${usd0(f.now.k401.K)} · ${usd0(f.k401Total.total)} so far`);
+    }
     if (f.goal) tile('Funds', '#a855f7', 'Goal', `${f.goal.percent}%`, `${usd0(f.goal.need.total)} a month to reach ${usd0(f.goal.target)} by ${f.goal.deadlineLabel}`);
     if (f.now.loan.total > 0 || (f.loans || []).length) {
       tile('Funds', '#f87171', 'Loan payments', money(f.now.loan.total), `${monthWord} · ` + ((f.loans || []).filter((l) => l.thisMonth > 0).map((l) => l.name).join(', ') || 'none yet this month'));
@@ -1992,7 +2046,7 @@
     if (first) { $('priorV').value = PRIOR_DEFAULT.V.toFixed(2); $('priorK').value = PRIOR_DEFAULT.K.toFixed(2); }
     goalDialog.showModal();
   });
-  for (const id of ['goalTarget', 'goalDeadline', 'priorV', 'priorK', 'targetPct', 'recapTo', 'payInvest', 'payLoan', 'moneyOther']) {
+  for (const id of ['goalTarget', 'goalDeadline', 'priorV', 'priorK', 'targetPct', 'recapTo', 'payInvest', 'payLoan', 'payK401', 'moneyOther']) {
     $(id).addEventListener('input', () => $(id).classList.remove('invalid'));
   }
   $('goalForm').addEventListener('submit', async (e) => {
@@ -2083,8 +2137,8 @@
   });
 
   // ---- Payday plan: after a salary is logged, suggest how to split it and log it in one tap.
-  // It always leaves room for spending: at least (100% - savings target) of the paycheck, or last month's
-  // spending per paycheck, whichever is more.
+  // It always leaves room for spending: at least (100% - savings target) of the paycheck (30% when no
+  // target is set), or last month's spending per paycheck, whichever is more.
   const paydayDialog = $('paydayDialog');
   let payday = null;
   function openPayday(income) {
@@ -2096,9 +2150,12 @@
     const checksLeft = salaries >= 2 ? 1 : 2; // usually two paychecks a month
     const last = f.history.filter((h) => h.month !== f.month).pop();
     const spendPerCheck = Math.max(0, (last ? last.spent[who] - last.loan[who] : 0) / 2);
-    const floorKeep = Math.max(spendPerCheck, f.savingsTarget !== null && f.savingsTarget !== undefined ? income.amount * (1 - f.savingsTarget / 100) : 0);
+    // Without a savings target, keep at least 30% of the paycheck for spending.
+    const keepShare = f.savingsTarget !== null && f.savingsTarget !== undefined ? 1 - f.savingsTarget / 100 : 0.3;
+    const floorKeep = Math.max(spendPerCheck, income.amount * keepShare);
     const loanSug = Math.round(Math.max(0, ((f.loanUsual || {})[who] || 0) - f.now.loan[who]) / checksLeft);
-    let investSug = f.goal ? Math.max(0, f.goal.need[who] - f.goal.thisMonth[who]) / checksLeft
+    const k401Sug = (f.k401Last || {})[who] || 0;
+    let investSug = f.goal ? Math.max(0, (f.goal.need[who] - f.goal.thisMonth[who]) / checksLeft - k401Sug)
       : f.savingsTarget ? income.amount * f.savingsTarget / 100 : 0;
     investSug = Math.round(Math.max(0, Math.min(investSug, income.amount - loanSug - floorKeep)));
     payday = { who, income, floorKeep };
@@ -2106,6 +2163,7 @@
     $('paydayIntro').textContent = `${money(income.amount)} came in. A split that keeps you on track` +
       (f.goal ? ` for ${usd0(f.goal.target)} by ${f.goal.deadlineLabel}` : '') + ' and leaves room to spend. Change the amounts, or Skip.';
     $('payInvest').value = investSug ? String(investSug) : '';
+    $('payK401').value = k401Sug ? k401Sug.toFixed(2) : '';
     $('payWhere').value = who === 'K' ? 'India' : 'USA';
     const names = (f.loans || []).map((l) => l.name);
     $('loanNames').innerHTML = '';
@@ -2131,7 +2189,9 @@
     if (e.submitter && e.submitter.value === 'cancel') { paydayDialog.close(); payday = null; return; }
     const inv = $('payInvest').value.trim() === '' ? 0 : parseAmount($('payInvest').value);
     const loan = $('payLoan').value.trim() === '' ? 0 : parseAmount($('payLoan').value);
+    const k401 = $('payK401').value.trim() === '' ? 0 : parseAmount($('payK401').value);
     const loanName = $('payLoanName').value.trim();
+    if (k401 === null || k401 < 0) return $('payK401').classList.add('invalid');
     if (inv === null || inv < 0) return $('payInvest').classList.add('invalid');
     if (loan === null || loan < 0) return $('payLoan').classList.add('invalid');
     if (loan > 0 && !loanName) return $('payLoanName').classList.add('invalid');
@@ -2139,6 +2199,7 @@
     const { who } = payday;
     const date = payday.income.date;
     const logged = [];
+    if (k401 > 0) { enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date, kind: '401(K)', category: '401(K)', amount: k401, person: who, notes: 'Payday plan' } }); logged.push(`401(K) ${money(k401)}`); }
     if (inv > 0) { enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date, kind: 'Investment', category: $('payWhere').value, amount: inv, person: who, from: 'Income', notes: 'Payday plan' } }); logged.push(`invested ${money(inv)}`); }
     if (loan > 0) { enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date, kind: 'Loan payment', category: loanName, amount: loan, person: who, notes: 'Payday plan' } }); logged.push(`${money(loan)} to ${loanName}`); }
     payday = null;

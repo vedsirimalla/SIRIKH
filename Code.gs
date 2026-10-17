@@ -36,9 +36,11 @@
  * Columns J onward of each month tab hold that month's tables (who owes whom, fixed bills,
  * personal expenses, budgets with what is left). The script overwrites that area.
  *
- * Income, investments, loan payments, savings and the savings goal live in the "Funds" tab: entries
- * on the left, an overview (this month, savings, goal, loan payments, month by month) from column J
- * (see the Funds section at the end of this file). An optional weekly email recap runs from a trigger.
+ * Income, 401(K), investments, loan payments, savings and the savings goal live in the "Funds" tab:
+ * entries on the left, an overview (this month, 401(K), savings, goal, loan payments, month by month)
+ * from column J. Two more tabs are rebuilt from it: "Loans" (each loan month by month and every
+ * payment) and "VK" (V and K side by side, month over month). See the Funds section at the end of
+ * this file. An optional weekly email recap runs from a time-based trigger.
  *
  * Car expenses and fuel tracking live in their own "Sonata" tab (see the Sonata section
  * at the end of this file). They never mix with the monthly tabs, their budgets or their split.
@@ -50,7 +52,7 @@ const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
   'October', 'November', 'December'];
 const MONTH_TAB_RE = /^Sirikh (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 20;
+const BACKEND_VERSION = 21;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget', 'Settlement'];
@@ -1290,6 +1292,8 @@ function carState_(sheet) {
 //
 // Kind:
 //   Income            money in hand (after 401(K), insurance, taxes). Person V, K or Both (half each)
+//   401(K)            taken by the employer before pay; logged per paycheck. Person V or K. Not part
+//                     of income, spending or savings (it never reaches the bank); counts toward the goal
 //   Investment        401(K), India, USA... Person V or K. From: Income (this month) or Savings
 //   Loan payment      a payment sent toward a loan; Category = which loan. Person V, K or Both
 //   Use savings       spending from savings kept in earlier months. Person V, K or Both
@@ -1305,18 +1309,21 @@ function carState_(sheet) {
 // The month's savings already include any unspent joint budget (half each) and unspent personal
 // budget; the overview shows that breakdown, it is not added again.
 // Savings available = every earlier month's savings - savings used - invested from savings.
-// Goal (investments only): each person aims for half the target; needed per month = still to go /
-// months left including this one.
+// Goal (investments only, 401(K) included): each person aims for half the target; needed per month =
+// still to go / months left including this one.
+// Generated tabs (never type in them): "Loans" and "VK", rebuilt with the Funds overview.
 // ======================================================================================
 
 const FUNDS_TAB = 'Funds';
+const LOANS_TAB = 'Loans';
+const VK_TAB = 'VK';
 const FUNDS_HEADERS = ['Date', 'Kind', 'Category', 'Amount ($)', 'Person', 'Notes', 'ID', 'From'];
 const F = { DATE: 0, KIND: 1, CATEGORY: 2, AMOUNT: 3, PERSON: 4, NOTES: 5, ID: 6, FROM: 7 };
-const FUND_KINDS = ['Income', 'Investment', 'Loan payment', 'Use savings', 'Prior investment', 'Goal', 'Savings target'];
+const FUND_KINDS = ['Income', '401(K)', 'Investment', 'Loan payment', 'Use savings', 'Prior investment', 'Goal', 'Savings target'];
 const FUNDS_SUMMARY_COL = 10; // column J
-const FUNDS_SUMMARY_WIDTH = 6; // J:O
+const FUNDS_SUMMARY_WIDTH = 7; // J:P
 const FUND_COLORS = {
-  'Income': '#dcfce7', 'Investment': '#e9d5ff', 'Prior investment': '#f3e8ff', 'Loan payment': '#fecaca',
+  'Income': '#dcfce7', '401(K)': '#ddd6fe', 'Investment': '#e9d5ff', 'Prior investment': '#f3e8ff', 'Loan payment': '#fecaca',
   'Use savings': '#fef9c3', 'Goal': '#e0f2fe', 'Savings target': '#e0f2fe',
 };
 const RECAP_PROP = 'SIRIKH_RECAP_TO';
@@ -1324,6 +1331,7 @@ const RECAP_PROP = 'SIRIKH_RECAP_TO';
 function fundKind_(v) {
   const s = String(v).trim().toLowerCase();
   if (s === 'use surplus') return 'Use savings';
+  if (s === '401k' || s === '401 (k)' || s === '401(k)') return '401(K)';
   for (let i = 0; i < FUND_KINDS.length; i++) if (FUND_KINDS[i].toLowerCase() === s) return FUND_KINDS[i];
   return '';
 }
@@ -1359,14 +1367,14 @@ function validateFunds_(b) {
   if (kind === 'Savings target' && amount > 95) throw new Error('Savings target is a percent of income (0 to 95).');
   let person = String(b.person || '').trim();
   if (person === 'Joint') person = 'Both';
-  const allowed = { 'Income': ['V', 'K', 'Both'], 'Investment': ['V', 'K'], 'Loan payment': ['V', 'K', 'Both'], 'Use savings': ['V', 'K', 'Both'],
+  const allowed = { 'Income': ['V', 'K', 'Both'], '401(K)': ['V', 'K'], 'Investment': ['V', 'K'], 'Loan payment': ['V', 'K', 'Both'], 'Use savings': ['V', 'K', 'Both'],
     'Prior investment': ['V', 'K'] }[kind];
   if (allowed && allowed.indexOf(person) === -1) throw new Error('Person must be ' + allowed.join(', ').replace(/, ([^,]*)$/, ' or $1') + '.');
   if (!allowed) person = 'Both';
   let category = String(b.category || '').trim();
   if (kind === 'Goal' && !isMonthKey_(category)) throw new Error('Pick a deadline month.');
   if (!category) {
-    category = { 'Income': 'Salary', 'Investment': 'Investment', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
+    category = { 'Income': 'Salary', '401(K)': '401(K)', 'Investment': 'Investment', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
       'Prior investment': 'Before tracking', 'Savings target': 'Savings target' }[kind] || '';
   }
   const from = String(b.from || '').trim();
@@ -1441,7 +1449,7 @@ function fundsModel_(today, fundsRows, months, carRows) {
   const incomeMonths = rows.filter((r) => r.kind === 'Income').map((r) => r.date.slice(0, 7)).sort();
   const start = incomeMonths.length && incomeMonths[0] < current ? incomeMonths[0] : current;
   const blank = () => ({ income: { V: 0, K: 0 }, joint: 0, fixed: 0, personal: { V: 0, K: 0 }, carShared: 0, car: { V: 0, K: 0 },
-    invest: { V: 0, K: 0 }, investSaved: { V: 0, K: 0 }, loan: { V: 0, K: 0 }, used: { V: 0, K: 0 }, jointBudget: null, pb: { V: null, K: null } });
+    invest: { V: 0, K: 0 }, investSaved: { V: 0, K: 0 }, loan: { V: 0, K: 0 }, used: { V: 0, K: 0 }, k401: { V: 0, K: 0 }, jointBudget: null, pb: { V: null, K: null } });
   const byMonth = {};
   for (let n = monthIndex_(start); n <= monthIndex_(current); n++) byMonth[keyOfIndex_(n)] = blank();
   const at = (key) => byMonth[key] || null;
@@ -1454,6 +1462,7 @@ function fundsModel_(today, fundsRows, months, carRows) {
     if (r.kind === 'Investment') add(r.from === 'Savings' ? m.investSaved : m.invest, split_(r.person, r.amount));
     if (r.kind === 'Use savings') add(m.used, split_(r.person, r.amount));
     if (r.kind === 'Loan payment') add(m.loan, split_(r.person, r.amount));
+    if (r.kind === '401(K)') add(m.k401, split_(r.person, r.amount));
   });
   months.forEach((mt) => {
     const m = at(mt.key);
@@ -1497,7 +1506,8 @@ function fundsModel_(today, fundsRows, months, carRows) {
       rate: { V: rateOf(kept.V, m.income.V), K: rateOf(kept.K, m.income.K), total: rateOf(kept.total, m.income.V + m.income.K) },
       budgets: { jointBudget: m.jointBudget === null ? null : round2_(m.jointBudget), jointLeft: jointLeft, personalLeft: personalLeft,
         fromJoint: fromJoint, fromPersonal: fromPersonal, rest: vk_({ V: savings.V - fromJoint.V - fromPersonal.V, K: savings.K - fromJoint.K - fromPersonal.K }) },
-      investSaved: vk_(m.investSaved), used: vk_(m.used), savedBefore: before, savedAfter: vk_(carry),
+      investSaved: vk_(m.investSaved), used: vk_(m.used), savedBefore: before, savedAfter: vk_(carry), k401: vk_(m.k401),
+      putAway: vk_({ V: m.k401.V + m.invest.V + m.investSaved.V, K: m.k401.K + m.invest.K + m.investSaved.K }),
     };
   });
   const now = history[history.length - 1];
@@ -1526,14 +1536,14 @@ function fundsModel_(today, fundsRows, months, carRows) {
   let goal = null;
   if (goalRow) {
     const invested = { V: 0, K: 0 };
-    rows.forEach((r) => { if (r.kind === 'Investment' || r.kind === 'Prior investment') add(invested, split_(r.person, r.amount)); });
+    rows.forEach((r) => { if (r.kind === 'Investment' || r.kind === 'Prior investment' || r.kind === '401(K)') add(invested, split_(r.person, r.amount)); });
     const target = goalRow.amount;
     const deadline = goalRow.category;
     const monthsLeft = Math.max(0, monthIndex_(deadline) - monthIndex_(current) + 1);
     const togo = { V: Math.max(0, target / 2 - invested.V), K: Math.max(0, target / 2 - invested.K) };
     const div = monthsLeft || 1;
     const tracked = history.length || 1;
-    const avg = { V: history.reduce((s, h) => s + h.invest.V + h.investSaved.V, 0) / tracked, K: history.reduce((s, h) => s + h.invest.K + h.investSaved.K, 0) / tracked };
+    const avg = { V: history.reduce((s, h) => s + h.putAway.V, 0) / tracked, K: history.reduce((s, h) => s + h.putAway.K, 0) / tracked };
     const togoTotal = togo.V + togo.K;
     const avgTotal = avg.V + avg.K;
     const finishIn = togoTotal <= 0 ? 0 : avgTotal > 0 ? Math.ceil(togoTotal / avgTotal) : null;
@@ -1541,7 +1551,7 @@ function fundsModel_(today, fundsRows, months, carRows) {
     goal = {
       target: round2_(target), deadline: deadline, deadlineLabel: monthLabel_(deadline), monthsLeft: monthsLeft,
       invested: vk_(invested), togo: vk_(togo), need: vk_({ V: togo.V / div, K: togo.K / div }), avg: vk_(avg),
-      thisMonth: vk_({ V: now.invest.V + now.investSaved.V, K: now.invest.K + now.investSaved.K }),
+      thisMonth: now.putAway,
       percent: target ? Math.min(100, round2_(((invested.V + invested.K) / target) * 100)) : 0,
       finishKey: finishKey, finishLabel: finishKey ? monthLabel_(finishKey) : '',
       onTrack: togoTotal <= 0 || (finishKey !== null && finishKey <= deadline),
@@ -1568,8 +1578,19 @@ function fundsModel_(today, fundsRows, months, carRows) {
   const loanUsual = vk_({ V: recentLoan.length ? recentLoan.reduce((s, h) => s + h.loan.V, 0) / recentLoan.length : now.loan.V,
     K: recentLoan.length ? recentLoan.reduce((s, h) => s + h.loan.K, 0) / recentLoan.length : now.loan.K });
 
+  // 401(K) so far, and each person's latest contribution (prefilled in the app; it can change any time).
+  const k401Total = { V: 0, K: 0 };
+  const k401Last = { V: null, K: null };
+  rows.filter((r) => r.kind === '401(K)').sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.i - b.i)).forEach((r) => {
+    add(k401Total, split_(r.person, r.amount));
+    if (r.person === 'V' || r.person === 'K') k401Last[r.person] = r.amount;
+  });
+  const loanPayments = rows.filter((r) => r.kind === 'Loan payment')
+    .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : b.i - a.i))
+    .map((r) => ({ date: r.date, loan: r.category, amount: r.amount, person: r.person, notes: r.notes }));
   return { month: current, today: today, start: start, now: now, available: available, history: history, safe: safe, goal: goal,
-    loans: loans, loanUsual: loanUsual, savingsTarget: targetRow ? targetRow.amount : null };
+    loans: loans, loanUsual: loanUsual, savingsTarget: targetRow ? targetRow.amount : null,
+    k401Total: vk_(k401Total), k401Last: k401Last, loanPayments: loanPayments };
 }
 
 function goalSuggestions_(g, now, available) {
@@ -1611,7 +1632,25 @@ function suggestions_(model) {
   return out;
 }
 
-// Overview in columns J to O of the Funds tab, rebuilt on every save.
+// Number format for one written cell: money for numbers, dates and percents as such, text otherwise.
+function cellFormat_(v) {
+  if (typeof v === 'number') return MONEY;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(v))) return 'yyyy-mm-dd';
+  if (/^-?\d+(\.\d+)?%$/.test(String(v))) return '0.0%';
+  return '@';
+}
+
+// Writes a block of rows at (row, col): values, formats in one call, bold shaded header rows.
+function writeBlock_(sheet, row, col, out, heads) {
+  if (!out.length) return;
+  const width = out[0].length;
+  const range = sheet.getRange(row, col, out.length, width);
+  range.setValues(out);
+  range.setNumberFormats(out.map((r) => r.map(cellFormat_)));
+  heads.forEach((r) => sheet.getRange(row + r - 1, col, 1, width).setFontWeight('bold').setBackground('#e0f2fe'));
+}
+
+// Overview in columns J to P of the Funds tab, rebuilt on every save.
 function writeFundsSummary_(sheet, model) {
   const W = FUNDS_SUMMARY_WIDTH;
   const out = [];
@@ -1628,7 +1667,7 @@ function writeFundsSummary_(sheet, model) {
   const trio = (label, o) => line([label, o.V, o.K, o.total], 'money');
 
   line(['This month: ' + n.label, 'V', 'K', 'Total'], 'head');
-  trio('Income', n.income);
+  trio('Income (in hand)', n.income);
   trio('Joint + Fixed (half each)', n.shared);
   trio('Personal', n.personal);
   trio('Sonata (own turns + half joint)', n.sonata);
@@ -1643,6 +1682,12 @@ function writeFundsSummary_(sheet, model) {
     trio('Safe to spend left', s.left);
     line(['Per day for ' + s.daysLeft + ' days', '', '', s.perDay], 'money');
   }
+  gap();
+  line(['401(K) (taken before pay)', 'V', 'K', 'Total'], 'head');
+  trio('This month', n.k401);
+  trio('So far', model.k401Total);
+  line(['Latest per paycheck', model.k401Last.V === null ? '' : model.k401Last.V, model.k401Last.K === null ? '' : model.k401Last.K], 'money');
+  trio('Put away this month (401(K) + invested)', n.putAway);
   const b = n.budgets;
   if (b.jointLeft !== null || b.personalLeft.V !== null || b.personalLeft.K !== null) {
     gap();
@@ -1678,8 +1723,8 @@ function writeFundsSummary_(sheet, model) {
     model.loans.forEach((l) => line([l.name, l.thisMonth, l.total, l.V, l.K, l.last], 'money'));
   }
   gap();
-  line(['Month by month', 'Income', 'Spent', 'Invested', 'Savings', 'Savings total'], 'head');
-  model.history.slice().reverse().forEach((h) => line([h.label, h.income.total, h.spent.total, h.invest.total, h.savings.total, h.savedAfter.total], 'money'));
+  line(['Month by month', 'Income', '401(K)', 'Spent', 'Invested', 'Savings', 'Savings total'], 'head');
+  model.history.slice().reverse().forEach((h) => line([h.label, h.income.total, h.k401.total, h.spent.total, h.invest.total, h.savings.total, h.savedAfter.total], 'money'));
   const tips = suggestions_(model);
   if (tips.length) {
     gap();
@@ -1688,9 +1733,83 @@ function writeFundsSummary_(sheet, model) {
   }
   const clearRows = Math.max(sheet.getLastRow(), out.length);
   sheet.getRange(1, FUNDS_SUMMARY_COL, clearRows, W).clearContent().clearFormat();
-  sheet.getRange(1, FUNDS_SUMMARY_COL, out.length, W).setValues(out);
-  heads.forEach((r) => sheet.getRange(r, FUNDS_SUMMARY_COL, 1, W).setFontWeight('bold').setBackground('#e0f2fe'));
-  moneyRows.forEach((r) => sheet.getRange(r, FUNDS_SUMMARY_COL + 1, 1, W - 2).setNumberFormat(MONEY));
+  writeBlock_(sheet, 1, FUNDS_SUMMARY_COL, out, heads);
+}
+
+// Builds a fresh generated tab (Loans, VK): cleared and rewritten on every save.
+function generatedTab_(name) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(name) || ss.insertSheet(name);
+  sheet.clear();
+  return sheet;
+}
+
+// "Loans": every loan's payments month by month, and every payment. Data stays in the Funds tab.
+function writeLoansTab_(model) {
+  const pays = model.loanPayments;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!pays.length && !ss.getSheetByName(LOANS_TAB)) return;
+  const sheet = generatedTab_(LOANS_TAB);
+  const names = model.loans.map((l) => l.name);
+  const W = Math.max(6, names.length + 2);
+  const out = [];
+  const heads = [];
+  const line = (cells, head) => { out.push(cells.concat(new Array(W - cells.length).fill(''))); if (head) heads.push(out.length); };
+  line(['Loans (built from the Funds tab; log payments in the app. Do not type here.)']);
+  line([]);
+  line(['Loan', 'This month', 'Total paid', 'V', 'K', 'Last paid'], true);
+  model.loans.forEach((l) => line([l.name, l.thisMonth, l.total, l.V, l.K, l.last]));
+  if (!model.loans.length) line(['No loan payments yet']);
+  line([]);
+  line(['Month by month'].concat(names).concat(['Total']), true);
+  const byMonth = {};
+  pays.forEach((p) => {
+    const m = p.date.slice(0, 7);
+    const row = byMonth[m] || (byMonth[m] = {});
+    const k = p.loan.toLowerCase();
+    row[k] = (row[k] || 0) + p.amount;
+  });
+  Object.keys(byMonth).sort().reverse().forEach((m) => {
+    const row = byMonth[m];
+    const vals = names.map((nm) => round2_(row[nm.toLowerCase()] || 0));
+    line([monthLabel_(m)].concat(vals).concat([round2_(vals.reduce((x, y) => x + y, 0))]));
+  });
+  line([]);
+  line(['All payments', 'Loan', 'Amount', 'Paid by', 'Notes'], true);
+  pays.forEach((p) => line([p.date, p.loan, p.amount, p.person === 'Both' ? 'V + K' : p.person, p.notes]));
+  writeBlock_(sheet, 1, 1, out, heads);
+  sheet.getRange(1, 1).setFontWeight('bold');
+  sheet.setFrozenRows(0);
+}
+
+// "VK": V and K side by side, one row per month (newest first), everything for each person.
+function writeVkTab_(model) {
+  const sheet = generatedTab_(VK_TAB);
+  const cols = ['Month', 'Income (in hand)', '401(K)', 'Joint + Fixed (half)', 'Personal', 'Sonata', 'Loan payments', 'Spent',
+    'Invested', 'Savings', 'Savings rate', 'Savings total', 'Put away (401(K) + invested)'];
+  const W = cols.length;
+  const out = [];
+  const heads = [];
+  const pct = (x) => (x === null || x === undefined ? '' : x.toFixed(1) + '%');
+  const line = (cells, head) => { out.push(cells.concat(new Array(W - cells.length).fill(''))); if (head) heads.push(out.length); };
+  line(['V and K month by month (built from the Funds, month and Sonata tabs. Do not type here.)']);
+  line(['Shared costs count half each. Savings = income - spent - invested. 401(K) is taken before pay, so it is not in income or savings.']);
+  ['V', 'K'].forEach((w) => {
+    line([]);
+    line([w === 'V' ? 'V' : 'K'], true);
+    line(cols, true);
+    const sum = { income: 0, k401: 0, shared: 0, personal: 0, sonata: 0, loan: 0, spent: 0, invest: 0, savings: 0, putAway: 0 };
+    model.history.slice().reverse().forEach((h) => {
+      line([h.label, h.income[w], h.k401[w], h.shared[w], h.personal[w], h.sonata[w], h.loan[w], h.spent[w], h.invest[w], h.savings[w],
+        pct(h.rate[w]), h.savedAfter[w], h.putAway[w]]);
+      Object.keys(sum).forEach((k) => { sum[k] += h[k][w]; });
+    });
+    const rate = sum.income > 0 ? ((sum.income - sum.spent) / sum.income) * 100 : null;
+    line(['All months', round2_(sum.income), round2_(sum.k401), round2_(sum.shared), round2_(sum.personal), round2_(sum.sonata), round2_(sum.loan),
+      round2_(sum.spent), round2_(sum.invest), round2_(sum.savings), pct(rate), model.now.savedAfter[w], round2_(sum.putAway)], true);
+  });
+  writeBlock_(sheet, 1, 1, out, heads);
+  sheet.getRange(1, 1).setFontWeight('bold');
 }
 
 function fundsState_(today, months, carSheet) {
@@ -1701,6 +1820,8 @@ function fundsState_(today, months, carSheet) {
   if (sheet) {
     colorFunds_(sheet);
     writeFundsSummary_(sheet, model);
+    writeLoansTab_(model);
+    writeVkTab_(model);
   }
   model.suggestions = suggestions_(model);
   model.hasEntries = raw.length > 0;
@@ -1767,6 +1888,7 @@ function recapText_(today, model, carRows) {
   lines.push('Last 7 days: ' + usd0_(week) + '.');
   if (model.safe) lines.push('Safe to spend: ' + (model.safe.left.total >= 0 ? usd0_(model.safe.left.total) + ' left, about ' + usd0_(model.safe.perDay) + ' a day' : usd0_(-model.safe.left.total) + ' over') + ' to keep ' + model.safe.percent + '% of income.');
   if (n.income.total > 0) lines.push('Income ' + usd0_(n.income.total) + ', invested ' + usd0_(n.invest.total) + ', savings ' + usd0_(n.savings.total) + (n.rate.total !== null ? ' (' + Math.round(n.rate.total) + '% kept)' : '') + '.');
+  if (n.k401.total > 0) lines.push('401(K) this month: ' + usd0_(n.k401.total) + ' (V ' + usd0_(n.k401.V) + ', K ' + usd0_(n.k401.K) + ').');
   lines.push('Savings available from earlier months: ' + usd0_(model.available.total) + '.');
   if (model.goal) lines.push('Goal ' + usd0_(model.goal.target) + ' by ' + model.goal.deadlineLabel + ': ' + model.goal.percent.toFixed(1) + '% done, ' + usd0_(model.goal.need.total) + ' a month needed (' + (model.goal.onTrack ? 'on track' : 'behind') + ').');
   if (n.loan.total > 0) lines.push('Loan payments this month: ' + usd0_(n.loan.total) + ' (' + model.loans.filter((l) => l.thisMonth > 0).map((l) => l.name + ' ' + usd0_(l.thisMonth)).join(', ') + ').');

@@ -243,6 +243,24 @@
         <div class="muted">Savings = income minus everything spent minus investments: money kept but not decided on yet. Shared costs count half each; settlements are ignored.</div>
       </section>
 
+      <section class="card k401-card" aria-labelledby="mK401Title">
+        <div id="mK401Title" class="eyebrow">401(K)</div>
+        <div class="left-line">
+          <span id="mK401" class="balance-amount">—</span>
+          <span class="left-word">this month</span>
+        </div>
+        <div class="stats">
+          <div><span class="stat-label">V</span><span id="mK401V">—</span></div>
+          <div><span class="stat-label">K</span><span id="mK401K">—</span></div>
+          <div><span class="stat-label">So far</span><span id="mK401All">—</span></div>
+        </div>
+        <table class="split money-table">
+          <thead><tr><th scope="col">Month</th><th scope="col">V</th><th scope="col">K</th><th scope="col">Total</th></tr></thead>
+          <tbody id="mK401Table"></tbody>
+        </table>
+        <div id="mK401Note" class="muted">Taken by the employer before pay, so it is not in income or savings. Log it per paycheck with 401(K) below; it counts toward the goal.</div>
+      </section>
+
       <section class="card" aria-labelledby="mFromTitle" id="mFromCard" hidden>
         <div id="mFromTitle" class="eyebrow">Where this month's savings come from</div>
         <table class="split money-table">
@@ -400,6 +418,8 @@
           <div class="seg" id="kindSeg">
             <input type="radio" name="moneyKind" id="mkIncome" value="Income" checked>
             <label for="mkIncome">Income</label>
+            <input type="radio" name="moneyKind" id="mk401" value="401(K)">
+            <label for="mk401">401(K)</label>
             <input type="radio" name="moneyKind" id="mkInvest" value="Investment">
             <label for="mkInvest">Invest</label>
             <input type="radio" name="moneyKind" id="mkLoan" value="Loan payment">
@@ -657,11 +677,16 @@
           <select id="payWhere">
             <option>India</option>
             <option>USA</option>
-            <option>401(K)</option>
             <option>Other</option>
           </select>
         </label>
       </div>
+      <label id="payK401Row">401(K) taken from this paycheck ($)
+        <div class="amount">
+          <span>$</span>
+          <input type="text" id="payK401" inputmode="decimal">
+        </div>
+      </label>
       <div class="grid2" id="payLoanRow">
         <label>Loan payment ($)
           <div class="amount">

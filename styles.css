@@ -270,7 +270,10 @@ input.invalid { border-color: var(--err); }
 .hint { margin-top: 6px; }
 .seg.two { grid-template-columns: 1fr 1fr; }
 #typeSeg label { font-size: 14px; }
-#kindSeg { grid-template-columns: repeat(4, 1fr); }
+#kindSeg { grid-template-columns: repeat(5, 1fr); }
+#kindSeg label { font-size: 14px; }
+.k401-card { border-left: 5px solid #8b5cf6; }
+.c-k401 { --row: #ddd6fe; }
 
 /* Funds */
 .money-table { margin-top: 10px; }

@@ -33,7 +33,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - A plain line such as "V owes K $140.50", plus an overall line that includes fixed bills.
 - **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total, and who owes whom for fixed bills.
 - **Sonata (car):** the fourth Type option. Car costs and fuel go to their own **Sonata** tab. V and K take turns paying (V three tanks, K the fourth), so own turns owe nothing; Joint costs split 50/50. See "Sonata tab" below.
-- **Funds:** what comes in and what goes out: income, investments, loan payments, savings, a savings goal, safe to spend, a payday plan and an optional weekly email. Kept in its own **Funds** tab. See "Funds tab" below.
+- **Funds:** what comes in and what goes out: income, 401(K), investments, loan payments, savings, a savings goal, safe to spend, a payday plan and an optional weekly email. Kept in its own **Funds** tab, with two generated tabs: **Loans** and **VK**. See "Funds tab" below.
 - **Color coding** (in the app and the sheet):
 
   | Type | Color |
@@ -72,11 +72,14 @@ Open **Funds** from the menu. It tracks what comes in and what goes out, apart f
 | Kind | What to log | Person |
 |---|---|---|
 | Income | Money in hand after 401(K), insurance and taxes: Salary, Tax refund, Bonus, Other | V, K, or Both (half each) |
-| Invest | Money put away: 401(K), India, USA, Other. **From:** this month's income, or Savings (money kept in earlier months) | V or K |
+| 401(K) | What the employer took from that paycheck before pay. Starts at the last amount logged for that person; change it when the contribution changes | V or K |
+| Invest | Money you put away from pay: India, USA, Other. **From:** this month's income, or Savings (money kept in earlier months) | V or K |
 | Loan | What you sent toward a loan. Pick the loan (buttons appear after the first payment) or name a new one | V, K, or Both (half each) |
 | Savings | Spending from savings kept in earlier months, with what it was for | V, K or Both |
 
-Log each paycheck as it arrives (V 3,138.18 and K 2,958.70 at the moment). The 401(K) comes out before the paycheck, so also log it as Invest: it then counts toward the goal.
+Log each paycheck as it arrives (V 3,138.18 and K 2,958.70 at the moment). Salary comes every two weeks; each paycheck counts in the month of its date, so two October paychecks both count in October (three when a month has three paydays). The Date field can be changed to log a paycheck or expense on the day it really happened.
+
+**401(K):** taken by the employer before the paycheck, so it never reaches the bank. It is kept out of income, spending and savings, tracked in its own table (this month, so far, latest per paycheck, month by month) and counted toward the goal. The payday plan fills it in with the last amount, so logging a paycheck also logs its 401(K) in one tap.
 
 **This month (V, K, Total):**
 
@@ -88,7 +91,7 @@ Log each paycheck as it arrives (V 3,138.18 and K 2,958.70 at the moment). The 4
 | Sonata | joint car costs half each; V's and K's turns to their owner |
 | Loan payments | Loan entries this month (Both = half each) |
 | **Spent** | Joint/2 + Fixed/2 + Personal + Sonata + Loan payments |
-| Invested | Invest entries from this month's income |
+| Invested | Invest entries from this month's income (401(K) is separate) |
 | **Savings** | Income - Spent - Invested: money kept but not decided on yet |
 | Kept | (Invested + Savings) / Income, the savings rate |
 
@@ -100,7 +103,7 @@ Example (October): income 6,096.88; spent 650 (joint 100, personal 50, loan 500)
 
 **Savings from earlier months:** every earlier month's savings, minus Savings entries (spent from it), minus Invest entries from Savings. Kept apart from this month; on the 1st, last month's savings join it. Your call whether to invest it or spend it.
 
-**Safe to spend:** set a savings target, the share of income to keep (invested + savings), for example 70%. Then:
+**Safe to spend:** set a savings target, the share of in-hand income to keep (invested + savings), for example 70%. Then:
 
 | Number | Formula |
 |---|---|
@@ -115,7 +118,7 @@ The bar turns amber at 80% used and red when over. Home shows it first.
 
 | Number | Formula |
 |---|---|
-| Invested | Invest entries (from income or savings) plus the before-tracking amounts |
+| Invested | 401(K) entries, Invest entries (from income or savings) and the before-tracking amounts |
 | To go | half the target minus what that person has invested (never below 0) |
 | Months left | months from this month through the deadline month, both included |
 | Needed per month | To go / Months left, per person |
@@ -126,11 +129,17 @@ Suggestions: the monthly amount for each person, when your average would reach t
 
 **Loan payments:** simple logs. The card lists each loan with this month, total paid, and V / K.
 
-**Payday plan:** after a Salary is logged for V or K, a short form suggests what to invest and what to send to a loan from that paycheck, and logs them in one tap (or Skip). It always leaves room to spend: at least (100% - savings target) of the paycheck, or last month's spending per paycheck, whichever is more.
+**Payday plan:** after a Salary is logged for V or K, a short form shows that paycheck's 401(K) (the last amount) and suggests what to invest and what to send to a loan, then logs them in one tap (or Skip). It always leaves room to spend: at least (100% - savings target) of the paycheck (30% when no target is set), or last month's spending per paycheck, whichever is more.
 
 **Weekly email (optional):** **Set up weekly email** on the Funds page, enter one or two addresses, and Save (or Save + send test). Every Sunday evening both get: spending so far vs last month by the same day, the last 7 days, safe to spend, income, invested and savings, savings from earlier months, the goal, loan payments, and the top next steps. It is sent from the Google account that owns the script; the addresses are kept in the script's settings, not in the app. Turning it off removes the weekly trigger.
 
-**Funds tab in the sheet:** Date | Kind | Category | Amount ($) | Person | Notes | ID (hidden) | From. Rows are colored by Kind (Income green, Invest purple, Loan red, Savings yellow, Goal and Savings target blue). Columns J onward, rebuilt on every save, like the Sonata summary: This month (V, K, Total, with safe to spend), Where this month's savings come from, Savings (from earlier months, used, invested from, available now, after this month), Goal, Loan payments, Month by month (Income, Spent, Invested, Savings, Savings total) and Suggestions. Do not type in columns J onward. Hand edits to entries in columns A to H recalculate everything.
+**Funds tab in the sheet:** Date | Kind | Category | Amount ($) | Person | Notes | ID (hidden) | From. Rows are colored by Kind (Income green, 401(K) violet, Invest purple, Loan red, Savings yellow, Goal and Savings target blue). Columns J onward, rebuilt on every save, like the Sonata summary: This month (V, K, Total, with safe to spend), 401(K), Where this month's savings come from, Savings (from earlier months, used, invested from, available now, after this month), Goal, Loan payments, Month by month (Income, 401(K), Spent, Invested, Savings, Savings total) and Suggestions. Do not type in columns J onward. Hand edits to entries in columns A to H recalculate everything.
+
+**Loans tab (generated):** each loan with this month, total paid, V and K, and last paid; a month-by-month table with one column per loan; and every payment, newest first. Payments are logged in the app (Funds > Loan) and stored in the Funds tab; this tab only shows them. It appears with the first loan payment.
+
+**VK tab (generated):** V and K separately, one row per month (newest first) plus an All months row: Income (in hand), 401(K), Joint + Fixed (half), Personal, Sonata, Loan payments, Spent, Invested, Savings, Savings rate, Savings total, Put away (401(K) + invested).
+
+Do not type in the Loans or VK tabs; they are rebuilt on every save.
 
 Tracking starts with the first month that has an Income entry. The **श्री. Fam.** tab is never read or changed.
 
@@ -150,7 +159,7 @@ Keep all files at the top level of the repo.
 
 ## How the sheet is chosen
 
-The app never uses the Google Sheets URL. It talks to the **Apps Script web app** you deploy from inside the spreadsheet, and that script writes to whichever spreadsheet you opened it from. Joint, Fixed and Personal entries go to **one tab per month**; car entries go to the **Sonata** tab; income, investments and loan payments go to the **Funds** tab.
+The app never uses the Google Sheets URL. It talks to the **Apps Script web app** you deploy from inside the spreadsheet, and that script writes to whichever spreadsheet you opened it from. Joint, Fixed and Personal entries go to **one tab per month**; car entries go to the **Sonata** tab; income, 401(K), investments and loan payments go to the **Funds** tab, which also feeds the **Loans** and **VK** tabs.
 
 ## Monthly tabs
 
@@ -291,7 +300,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 
 - **App files:** upload the new versions to GitHub. Phones get them the next time the app opens online.
 - **`Code.gs`:** paste the new code, then go to **Deploy > Manage deployments > Edit (pencil) > Version: New version > Deploy**. The URL stays the same. An older Sirikh tab is upgraded in place, and its old rows count as Joint.
-- **Version 20 asks for permission once:** the weekly email needs "Send email as you" and "Allow this application to run when you are not present". Run any function once in the editor (for example select `weeklyRecap` and click Run) and approve, or approve when Apps Script prompts during deploy. Nothing is emailed until you set it up in the app.
+- **Version 20 and later ask for permission once:** the weekly email needs "Send email as you" and "Allow this application to run when you are not present". Run any function once in the editor (for example select `weeklyRecap` and click Run) and approve, or approve when Apps Script prompts during deploy. Nothing is emailed until you set it up in the app.
 
 ## Troubleshooting
 
@@ -300,7 +309,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal, Sonata or Funds entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 20" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal, Sonata or Funds entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 21" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |
