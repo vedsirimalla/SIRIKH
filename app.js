@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 17; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 18; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set' };
@@ -123,18 +123,29 @@
 
   // Starts from what the sheet last reported and applies changes not synced yet,
   // so the budget and the split update the moment an expense is saved, even offline.
+  // The month the app is in (the phone's date) and whether the last sync was for that month.
+  // On the 1st the budgets reset right away, before the next sync.
+  const currentMonth = () => today().slice(0, 7);
+  function stateForMonth() {
+    const st = getState();
+    return st && (st.month || (st.period && String(st.period.since).slice(0, 7))) === currentMonth() ? st : null;
+  }
+
+  // The month's numbers: what the sheet last reported plus changes not synced yet. A budget covers
+  // the whole calendar month, so setting it (or changing it) counts every expense already logged.
   function estimate() {
-    const state = getState();
-    const recent = state ? state.recent || [] : [];
-    const p = { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0, ...(state && state.period) };
-    let balance = state ? Number(state.balance) || 0 : 0;
+    const state = stateForMonth();
+    const month = currentMonth();
+    const recent = (getState() || {}).recent || [];
+    const p = { month, since: month + '-01', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0,
+      kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0, ...(state && state.period) };
     let hasBalance = state ? !!state.hasBalance : false;
+    const sameMonth = (e) => e && String(e.date).slice(0, 7) === month;
 
     const apply = (e, sign) => {
       const amt = sign * e.amount;
-      if (e.type === 'Add funds') { balance += amt; p.added += amt; }
+      if (e.type === 'Add funds') p.added += amt;
       if (e.type === 'Joint') {
-        balance -= amt;
         p.spent += amt;
         if (e.paidBy === 'V') p.v += amt;
         if (e.paidBy === 'K') p.k += amt;
@@ -154,19 +165,52 @@
 
     const queue = getQueue();
     for (const op of queue) {
-      if (op.op === 'add' && op.entry.type === 'Set balance') {
-        balance = op.entry.amount;
-        hasBalance = true;
-        Object.assign(p, { since: op.entry.date, start: op.entry.amount, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0 });
-      } else if (op.op === 'add' && op.table !== 'car') {
-        apply(op.entry, 1);
+      if (op.table === 'car') continue;
+      if (op.op === 'add') {
+        if (!sameMonth(op.entry)) continue;
+        if (op.entry.type === 'Set balance') { p.start = op.entry.amount; hasBalance = true; }
+        else apply(op.entry, 1);
       } else {
         const e = recent.find((r) => r.id === op.id);
-        if (e) apply(e, -1);
+        if (sameMonth(e)) apply(e, -1);
       }
     }
     for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'personal', 'kOnK', 'kOnV', 'vOnV', 'vOnK']) p[k] = round2(p[k] || 0);
-    return { balance: round2(balance), hasBalance, unsynced: queue.length, period: p };
+    const balance = hasBalance ? round2(p.start + p.added - p.spent) : 0;
+    return { balance, hasBalance, unsynced: queue.length, period: p };
+  }
+
+  // Which budgets the start-of-month prompt asks for.
+  function missingBudgets() {
+    const st = getState();
+    const fresh = stateForMonth();
+    const need = fresh && fresh.needsBudget
+      ? { ...fresh.needsBudget }
+      : { joint: true, V: !!(st && st.personalBudgets && st.personalBudgets.V), K: !!(st && st.personalBudgets && st.personalBudgets.K) };
+    // Budgets set on this phone but not synced yet.
+    for (const op of getQueue()) {
+      if (op.op !== 'add' || op.table === 'car' || String(op.entry.date).slice(0, 7) !== currentMonth()) continue;
+      if (op.entry.type === 'Set balance') need.joint = false;
+      if (op.entry.type === 'Personal budget') need[op.entry.expenseFor] = false;
+    }
+    return need;
+  }
+
+  function renderMonthPrompt() {
+    const card = $('monthPrompt');
+    const need = missingBudgets();
+    const dismissed = store.get('promptDismissed', '') === currentMonth();
+    const personal = ['V', 'K'].filter((w) => need[w]);
+    const show = !dismissed && !!getSettings() && (need.joint || personal.length > 0);
+    card.hidden = !show || isCarMode();
+    if (!show) return;
+    const name = monthName(currentMonth());
+    const parts = [];
+    if (need.joint) parts.push('the joint budget');
+    if (personal.length) parts.push(personal.join(' and ') + "'s personal budget");
+    $('monthPromptText').textContent = `Set up ${name}: ${parts.join(' and ')} ${parts.length > 1 || personal.length > 1 ? 'are' : 'is'} not set yet. Budgets reset on the 1st; nothing carries over.`;
+    $('promptJoint').hidden = !need.joint;
+    $('promptPersonal').hidden = !personal.length;
   }
 
   function renderBalance() {
@@ -314,7 +358,7 @@
         if (r.gallons !== undefined && r.gallons !== '') parts.push(`${r.gallons} gal`);
       }
       parts.push(r.notes);
-      if (!isCar && r.balance !== undefined && r.balance !== '') parts.push('Bal ' + money(r.balance));
+      if (!isCar && r.balance !== undefined && r.balance !== '') parts.push('joint left ' + money(r.balance));
       sub.append(tag, document.createTextNode(parts.filter(Boolean).join(' · ')));
       body.append(top, sub);
       li.appendChild(body);
@@ -344,6 +388,7 @@
     $('carDash').hidden = !isCar;
     renderBalance();
     renderPersonalBudgets();
+    renderMonthPrompt();
     $('jointCard').hidden = type !== 'Joint';
     $('personalBudgetCard').hidden = type !== 'Personal';
     const hasBalance = estimate().hasBalance;
@@ -358,8 +403,8 @@
   // ---------- Personal budgets
   // What the sheet reported, plus changes not synced yet.
   function estimatePersonal() {
-    const st = getState();
-    const recent = st ? st.recent || [] : [];
+    const st = stateForMonth();
+    const recent = (getState() || {}).recent || [];
     const pb = { V: null, K: null };
     for (const who of ['V', 'K']) {
       const b = st && st.personalBudgets && st.personalBudgets[who];
@@ -372,6 +417,7 @@
       if (op.table === 'car') continue;
       if (op.op === 'add' && op.entry.type === 'Personal budget') {
         const month = op.entry.date.slice(0, 7);
+        if (month !== currentMonth()) continue;
         const prev = pb[op.entry.expenseFor];
         pb[op.entry.expenseFor] = { month, since: month + '-01', budget: op.entry.amount, spent: prev && prev.month === month ? prev.spent : 0 };
       } else if (op.op === 'add' && op.entry.type === 'Personal') {
@@ -423,6 +469,10 @@
     }
     $('pbNote').textContent = pb.V || pb.K ? '' : "Set a monthly personal budget for V, K or both. Each person's Personal expenses come out of their own budget.";
   }
+
+  $('promptJoint').addEventListener('click', () => $('setBalanceBtn').click());
+  $('promptPersonal').addEventListener('click', () => $('setPersonalBtn').click());
+  $('promptLater').addEventListener('click', () => { store.set('promptDismissed', currentMonth()); renderMonthPrompt(); });
 
   const personalDialog = $('personalDialog');
   $('setPersonalBtn').addEventListener('click', () => {
@@ -677,7 +727,7 @@
       res = await fetch(s.url, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ ...payload, key: s.key }),
+        body: JSON.stringify({ ...payload, key: s.key, today: today() }),
       });
     } catch {
       throw failure('network', 'No connection.');
@@ -704,6 +754,8 @@
       version: data.version || 0,
       car: data.car || null,
       personalBudgets: data.personalBudgets || null,
+      month: data.month || '',
+      needsBudget: data.needsBudget || null,
     });
     store.set('syncedAt', Date.now());
   }

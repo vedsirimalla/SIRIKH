@@ -79,6 +79,12 @@ main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
 .pace { margin-top: 10px; font-size: 14px; color: var(--muted); }
 .settle { color: var(--text); font-weight: 700; font-size: 17px; margin: 12px 0 4px; }
 
+/* Start-of-month prompt */
+.month-prompt { border: 2px solid var(--accent); }
+.month-prompt p { margin: 0; font-weight: 600; }
+.month-prompt .row { flex-wrap: wrap; }
+.month-prompt .row button { flex: 1 1 auto; }
+
 /* Personal budgets */
 .pb-row { margin-top: 14px; }
 .pb-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }

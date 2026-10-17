@@ -18,7 +18,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - **Personal:** a personal budget for V and one for K, for a calendar month. **Set personal budget** sets either or both for the month of its start date. Every Personal expense for that person dated in that month comes out of it, whoever's card paid and even if it was logged before the budget was set (K's ramen on V's card reduces K's budget, and K still owes V).
   - **Fixed and Sonata:** no budget. Fixed bills get paid regardless; Sonata shows car stats instead.
 - **Joint monthly budget:**
-  - **Set monthly budget** starts a new budget, for example $705 on the 1st.
+  - **Set monthly budget** sets the budget for the current month, for example $705. Expenses already logged that month count right away.
   - **Joint** expenses are deducted the moment they are saved.
   - **Fixed** bills (rent, utilities) and **Personal** expenses are not taken from the budget.
   - The card shows how much is left, a progress bar, budget, spent, and how much you can spend per day for the rest of the month.
@@ -58,49 +58,46 @@ Keep all files at the top level of the repo.
 
 ## How the sheet is chosen
 
-The app never uses the Google Sheets URL. It talks to the **Apps Script web app** you deploy from inside the spreadsheet, and that script writes to whichever spreadsheet you opened it from.
+The app never uses the Google Sheets URL. It talks to the **Apps Script web app** you deploy from inside the spreadsheet, and that script writes to whichever spreadsheet you opened it from. Joint, Fixed and Personal entries go to **one tab per month**; car entries go to the **Sonata** tab.
 
-- **Tab:** set by `TAB_NAME` at the top of `Code.gs` (default `Sirikh`). The tab is created if it does not exist.
-- **Changing the tab:** edit `TAB_NAME`, then deploy a new version.
-- **Existing tabs:** do not point it at a tab you already use for something else. The script rewrites row 1 as its header, fills the Type and Balance columns, and writes its tables from column J onward.
+## Monthly tabs
 
-## Sirikh tab layout
+Each calendar month has its own tab, named like **Sirikh Oct 2026**, created automatically the first time an entry is dated in that month. An entry always goes to the tab of its date's month (an October receipt logged in November goes to October).
 
-| Date | Category | Amount ($) | Card Used | Notes | Type | Balance ($) | ID (hidden) | Expense For |
+| Date | Category | Amount ($) | Card Used | Notes | Type | Joint Left ($) | ID (hidden) | Expense For |
 |---|---|---|---|---|---|---|---|---|
-| 2026-10-01 | Balance set | $705.00 | Both | October budget | Set balance | $705.00 | | |
-| 2026-10-02 | Costco | $45.20 | K | Paneer, grapes | Joint | $659.80 | |
-| 2026-10-02 | Haircut | $20.00 | V | | Personal | $659.80 | |
-| 2026-10-01 | Rent | $1,800.00 | V | | Fixed | $659.80 | |
+| 2026-10-03 | Costco | $40.00 | V | | Joint | $560.00 | | |
+| 2026-10-05 | Walmart | $60.00 | K | | Joint | $500.00 | | |
+| 2026-10-10 | Balance set | $600.00 | Both | October budget | Set balance | $500.00 | | |
+| 2026-10-12 | Haircut | $20.00 | V | | Personal | $500.00 | | V |
 
+- **Budgets are per calendar month and reset on the 1st.** Nothing carries over.
+- **Set it any time:** the latest Set balance row in a month is that month's joint budget, and every Joint expense dated in the month counts against it, even ones logged before it (the Costco row above). The same goes for Personal budget rows and each person's Personal expenses.
+- **Joint Left ($)** = the month's joint budget minus joint spending up to that row. Blank until a budget is set for the month.
 - **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance`, `Personal budget` (or `Add funds` typed by hand). Blank counts as Joint.
-- **Personal budget** rows set the personal budget for the person in Expense For, for the month of the row's date (the latest one in a month wins).
-- **Expense For** is filled for Personal rows (V or K). Personal rows saved before this column existed count as the card owner's.
-- **Row colors** are set by the script from Type, Expense For and Card Used, and update after hand edits.
-- **Balance ($)** is recalculated top to bottom by the script, including after hand edits to Amount or Type.
+- **Expense For** is filled for Personal rows (V or K). Rows without it count as the card owner's.
+- **Row colors** come from Type, Expense For and Card Used, and update after hand edits.
 - **ID** prevents duplicates and identifies rows to delete. Do not edit it.
-- **Set balance** rows start a new budget. Everything below the most recent one belongs to the current month.
 
-### Tables in the sheet (column J onward)
+**Tables in each month tab (column J onward)**, rebuilt on every save:
 
-The script rebuilds these on every save, so the sheet always shows the same numbers as the app:
-
-1. **Who owes whom** (current budget, joint expenses):
-
-   | V paid | K paid | Total |
-   |---|---|---|
-   | 211.43 | 484.41 | 695.84 |
-   | **V's share** | **K's share** | **Equal split** |
-   | -136.49 | 136.49 | 347.92 |
-
-   Followed by "Settle up (joint)", "Personal on other's card" (owed in full), and "Overall (joint + fixed + personal)".
-2. **Fixed bills:** V paid, K paid, Total, and Settle up for fixed bills.
-3. **Personal expenses:** a grid of each person's Personal spending on their own card (nothing owed) and on the other's card (owed in full), then Settle up and Overall (joint + fixed + personal). The app shows the same grid when Personal is selected.
-4. **Monthly budgets:** Budget, Spent, Remaining for Joint, V personal and K personal.
+1. **Who owes whom** for the month: V paid, K paid, Total; V's share, K's share, Equal split; Settle up (joint); Personal on other's card; Overall (joint + fixed + personal).
+2. **Fixed bills:** V paid, K paid, Total, Settle up.
+3. **Personal expenses:** each person's Personal spending on their own card (nothing owed) and on the other's card (owed in full), Settle up, Overall.
+4. **Budgets for the month:** Budget, Spent and **Left** for Joint, V personal and K personal.
 5. **Colors:** a legend of the row colors.
-6. **History:** one row per budget period, newest first: Since, Budget, Joint spent, V paid, K paid, V's share, K's share, Settle up, Fixed total, Fixed settle, Personal settle, Overall, V personal spent, K personal spent. Past months stay on record here.
 
 Do not type in columns J onward; the script overwrites them.
+
+## Sirikh tab (overview)
+
+The **Sirikh** tab is a month-by-month overview, newest month first, rebuilt on every save:
+
+Month | Tab | Joint budget | Joint spent | Fixed bills | V personal spent | K personal spent | V personal left | K personal left | Joint settle | Fixed settle | Personal settle | Overall settle | **Joint left**
+
+The last column is what was left of that month's joint budget. Do not type in this tab.
+
+**Start of the month:** when the current month has no joint budget (or a personal budget that existed last month), the app shows a prompt with **Set joint budget**, **Set personal budgets** and **Later**.
 
 ## Sonata tab
 
@@ -210,7 +207,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 16" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 17" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

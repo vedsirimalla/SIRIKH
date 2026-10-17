@@ -24,6 +24,14 @@
     <div id="banner" class="banner" role="status" hidden></div>
 
     <div id="mainDash">
+    <section class="card month-prompt" id="monthPrompt" hidden>
+      <p id="monthPromptText"></p>
+      <div class="row">
+        <button type="button" id="promptJoint" class="primary">Set joint budget</button>
+        <button type="button" id="promptPersonal" class="primary">Set personal budgets</button>
+        <button type="button" id="promptLater">Later</button>
+      </div>
+    </section>
     <section class="card balance-card" id="jointCard" aria-labelledby="balanceLabel">
       <div id="balanceLabel" class="eyebrow">Monthly budget</div>
       <div class="left-line">
@@ -283,7 +291,7 @@
   <dialog id="fundsDialog">
     <form method="dialog" id="fundsForm" novalidate>
       <h2>Set monthly budget</h2>
-      <p class="muted">Starts a new budget. Joint expenses saved after this come out of it, and the V/K split starts again from zero.</p>
+      <p class="muted">Sets the joint budget for the month of the start date. Every joint expense in that month counts, even ones logged before. Budgets reset on the 1st; nothing carries over.</p>
       <label>Budget ($)
         <div class="amount">
           <span>$</span>

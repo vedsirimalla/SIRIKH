@@ -9,42 +9,45 @@
  * After changing this file later:
  *   Deploy > Manage deployments > Edit (pencil) > Version: New version > Deploy (the /exec URL stays the same).
  *
- * Tab "Sirikh" (created automatically):
- *   Date | Category | Amount ($) | Card Used | Notes | Type | Balance ($) | ID | Expense For
+ * One tab per calendar month, named like "Sirikh Oct 2026" (created automatically). Each entry goes
+ * to the tab of its date's month:
+ *   Date | Category | Amount ($) | Card Used | Notes | Type | Joint Left ($) | ID | Expense For
+ * The "Sirikh" tab is an overview with one row per month, rebuilt on every save.
  *
  * Card Used is whose card paid. Expense For is whose expense it is: blank (shared) for Joint and
  * Fixed, V or K for Personal. A Personal expense paid on the other person's card is owed back in
  * full (K's ramen on V's card: K owes V the whole amount).
  *
  * Type is one of:
- *   Joint        shared day-to-day expense, deducted from the monthly budget      (no color)
- *   Fixed        rent, utilities and other bills, tracked separately (orange: V light, K darker)
- *   Personal     logged only                                                     (blue: V light, K darker)
- *   Set balance      starts a new joint monthly budget (only Joint expenses come out of it)
- *   Personal budget  sets the personal budget for V or K (Expense For) for the calendar month of its
- *                    date. Every Personal expense for that person dated in that month comes out of
- *                    it, whoever's card paid, even one logged before the budget was set.
- *                    Fixed and Sonata have no budget.
- *   Add funds    adds to the budget (only from hand edits; the app no longer offers it)
- * Balance ($) and the row colors are recalculated by this script from top to bottom, so edits
- * made by hand in the tab are picked up automatically. Negative amounts are refunds.
+ *   Joint            shared day-to-day expense, comes out of the month's joint budget  (no color)
+ *   Fixed            rent, utilities and other bills, no budget       (orange: V light, K darker)
+ *   Personal         one person's own expense, comes out of that person's budget (blue: V light, K darker)
+ *   Set balance      the month's joint budget
+ *   Personal budget  the month's personal budget for V or K (Expense For)
+ *   Add funds        adds to the month's joint budget (only from hand edits)
+ * Budgets are per calendar month and reset on the 1st (nothing carries over). The latest budget
+ * row in a month sets the amount, and every expense dated in that month counts against it, even
+ * one logged before the budget was set. Joint Left ($) is the joint budget minus the joint
+ * spending up to that row; the rows and colors are recalculated whenever the tab changes.
  *
- * Columns J onward hold the same tables as the app, rebuilt on every save:
- *   Who owes whom, Fixed bills and Monthly budget for the current period (since the last
- *   "Set balance" row), a color legend, and a History table with one row per budget period.
- * The script overwrites that area, so do not type in it.
+ * Columns J onward of each month tab hold that month's tables (who owes whom, fixed bills,
+ * personal expenses, budgets with what is left). The script overwrites that area.
  *
  * Car expenses and fuel tracking live in their own "Sonata" tab (see the Sonata section
- * at the end of this file). They never mix with the Sirikh tab, its budget or its split.
+ * at the end of this file). They never mix with the monthly tabs, their budgets or their split.
  */
 
-const TAB_NAME = 'Sirikh';
+const OVERVIEW_TAB = 'Sirikh';
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
+  'October', 'November', 'December'];
+const MONTH_TAB_RE = /^Sirikh (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 16;
-const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Balance ($)', 'ID', 'Expense For'];
+const BACKEND_VERSION = 17;
+const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget'];
-// Row colors by who paid: Personal in blues, Fixed bills in oranges (V lighter, K darker).
+// Row colors: Personal in blues by whose expense, Fixed bills in oranges by whose card (V lighter, K darker).
 const COLORS = {
   personalV: '#dbeafe',
   personalK: '#93c5fd',
@@ -67,19 +70,29 @@ function doPost(e) {
     const lock = LockService.getScriptLock();
     lock.waitLock(15000);
     try {
-      const sheet = getSheet_();
+      migrateLegacy_();
+      // The phone's own date decides the current month (its time zone is the user's).
+      const today = /^\d{4}-\d{2}-\d{2}$/.test(String(body.today || '')) ? body.today : todayStr_();
+      const touched = [today.slice(0, 7)];
       const carSheet = getCarSheet_();
       const isCar = body.table === 'car';
       if (body.action === 'add') {
         if (isCar) addCar_(carSheet, validateCar_(body.entry || {}));
-        else addEntry_(sheet, validate_(body.entry || {}));
+        else {
+          const entry = validate_(body.entry || {});
+          addEntry_(entry);
+          touched.push(entry.date.slice(0, 7));
+        }
       } else if (body.action === 'delete') {
         if (isCar) deleteCar_(carSheet, String(body.id || ''));
-        else deleteEntry_(sheet, String(body.id || ''));
+        else {
+          const key = deleteEntry_(String(body.id || ''));
+          if (key) touched.push(key);
+        }
       } else if (body.action !== 'state') {
         throw new Error('Unknown action.');
       }
-      result = state_(sheet);
+      result = state_(today.slice(0, 7), touched);
       result.car = carState_(carSheet);
     } finally {
       lock.releaseLock();
@@ -91,14 +104,12 @@ function doPost(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// Simple trigger: keeps Balance ($) correct when the tab is edited by hand.
+// Simple trigger: keeps a month tab (and the overview) right when it is edited by hand.
 function onEdit(e) {
   const sheet = e && e.range && e.range.getSheet();
   if (!sheet) return;
-  if (sheet.getName() === TAB_NAME && e.range.getColumn() < SUMMARY_COL) {
-    const rows = recompute_(sheet);
-    writeSummary_(sheet, periods_(rows), personalBudgets_(rows));
-  }
+  const key = keyOfTab_(sheet.getName());
+  if (key && e.range.getColumn() < SUMMARY_COL) state_(todayStr_().slice(0, 7), [key]);
   if (sheet.getName() === CAR_TAB && e.range.getColumn() < CAR_SUMMARY_COL) carState_(sheet);
 }
 
@@ -108,9 +119,34 @@ function checkKey_(key) {
   if (key !== expected) throw new Error('Wrong key.');
 }
 
-function getSheet_() {
+function todayStr_() {
+  return Utilities.formatDate(new Date(), SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+}
+
+// '2026-10' <-> 'Sirikh Oct 2026'
+function tabName_(key) {
+  return 'Sirikh ' + MONTHS[Number(key.slice(5, 7)) - 1] + ' ' + key.slice(0, 4);
+}
+function keyOfTab_(name) {
+  const m = MONTH_TAB_RE.exec(String(name));
+  return m ? m[2] + '-' + String(MONTHS.indexOf(m[1]) + 1).padStart(2, '0') : null;
+}
+function monthLabel_(key) {
+  return MONTHS_LONG[Number(key.slice(5, 7)) - 1] + ' ' + key.slice(0, 4);
+}
+function previousKey_(key) {
+  const y = Number(key.slice(0, 4));
+  const m = Number(key.slice(5, 7));
+  return m === 1 ? (y - 1) + '-12' : y + '-' + String(m - 1).padStart(2, '0');
+}
+
+function monthSheet_(key, create) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(TAB_NAME) || ss.insertSheet(TAB_NAME);
+  let sheet = ss.getSheetByName(tabName_(key));
+  if (!sheet) {
+    if (!create) return null;
+    sheet = ss.insertSheet(tabName_(key));
+  }
   const header = sheet.getRange(1, 1, 1, HEADERS.length);
   if (header.getValues()[0].join('|') !== HEADERS.join('|')) {
     header.setValues([HEADERS]).setFontWeight('bold');
@@ -118,6 +154,37 @@ function getSheet_() {
     sheet.hideColumns(C.ID + 1);
   }
   return sheet;
+}
+
+// Every month tab, oldest first.
+function monthTabs_() {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheets()
+    .map((s) => ({ sheet: s, key: keyOfTab_(s.getName()) }))
+    .filter((t) => t.key)
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+// Earlier versions kept every row in the "Sirikh" tab. Once, move them into their month tabs and
+// turn "Sirikh" into the overview.
+function migrateLegacy_() {
+  const old = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(OVERVIEW_TAB);
+  if (!old || old.getLastRow() < 1 || old.getRange(1, 1).getValues()[0][0] !== 'Date') return;
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const groups = {};
+  readRows_(old).filter((r) => !isEmptyRow_(r)).forEach((r) => {
+    const d = formatDate_(r[C.DATE], tz);
+    const key = /^\d{4}-\d{2}/.test(d) ? d.slice(0, 7) : todayStr_().slice(0, 7);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(r.slice(0, HEADERS.length));
+  });
+  Object.keys(groups).forEach((key) => {
+    const sheet = monthSheet_(key, true);
+    const rows = groups[key];
+    sheet.getRange(nextRow_(sheet), 1, rows.length, HEADERS.length).setValues(rows);
+    sheet.getRange(2, C.DATE + 1, sheet.getLastRow() - 1, 1).setNumberFormat('yyyy-mm-dd');
+  });
+  old.clear();
+  old.setFrozenRows(0);
 }
 
 function validate_(b) {
@@ -168,23 +235,32 @@ function safeText_(s) {
   return /^[=+\-@]/.test(s) ? "'" + s : s;
 }
 
-function addEntry_(sheet, entry) {
+function addEntry_(entry) {
+  const sheet = monthSheet_(entry.date.slice(0, 7), true);
   // Retries from the phone's offline queue reuse the same id; save once.
   if (ids_(sheet).indexOf(entry.id) !== -1) return;
   const row = nextRow_(sheet);
   sheet.getRange(row, 1, 1, HEADERS.length)
     .setValues([[entry.date, entry.category, entry.amount, entry.paidBy, entry.notes, entry.type, '', entry.id, entry.expenseFor]]);
   sheet.getRange(row, C.DATE + 1).setNumberFormat('yyyy-mm-dd');
-  sheet.getRange(row, C.AMOUNT + 1).setNumberFormat('$#,##0.00');
+  sheet.getRange(row, C.AMOUNT + 1).setNumberFormat(MONEY);
 }
 
-function deleteEntry_(sheet, id) {
+// Deletes the row with this id from whichever month tab holds it; returns that month (or null).
+function deleteEntry_(id) {
   if (!id) throw new Error('Missing id.');
-  const i = ids_(sheet).lastIndexOf(id);
-  if (i !== -1) sheet.deleteRow(i + 2); // already gone is fine (retried delete)
+  const tabs = monthTabs_();
+  for (let t = 0; t < tabs.length; t++) {
+    const i = ids_(tabs[t].sheet).lastIndexOf(id);
+    if (i !== -1) {
+      tabs[t].sheet.deleteRow(i + 2);
+      return tabs[t].key;
+    }
+  }
+  return null; // already gone is fine (retried delete)
 }
 
-// First empty row under the data in A:H (the summary block in J:O does not count).
+// First empty row under the data in A:I (the tables from column J do not count).
 function nextRow_(sheet) {
   const rows = readRows_(sheet);
   for (let i = rows.length - 1; i >= 0; i--) if (!isEmptyRow_(rows[i])) return i + 3;
@@ -207,11 +283,26 @@ function isEmptyRow_(r) {
   return r[C.DATE] === '' && r[C.CATEGORY] === '' && r[C.AMOUNT] === '';
 }
 
-// Recalculates Type (blank > Joint), Balance ($) and row colors; writes only what changed.
+// The month's joint budget: the latest Set balance row (anywhere in the tab) plus any Add funds.
+// null when no budget is set for the month.
+function jointBudget_(rows) {
+  let budget = null;
+  let added = 0;
+  rows.forEach((r) => {
+    if (isEmptyRow_(r)) return;
+    const type = normalizeType_(r[C.TYPE]);
+    if (type === 'Set balance') budget = toNumber_(r[C.AMOUNT]);
+    if (type === 'Add funds') added += toNumber_(r[C.AMOUNT]);
+  });
+  return budget === null ? null : round2_(budget + added);
+}
+
+// Recalculates Type (blank > Joint), Joint Left ($) and row colors; writes only what changed.
 function recompute_(sheet) {
   const rows = readRows_(sheet);
   if (!rows.length) return rows;
-  let balance = 0;
+  const budget = jointBudget_(rows);
+  let joint = 0;
   let changed = false;
   rows.forEach((r) => {
     if (isEmptyRow_(r)) {
@@ -220,18 +311,15 @@ function recompute_(sheet) {
       return;
     }
     const type = normalizeType_(r[C.TYPE]);
-    const amount = toNumber_(r[C.AMOUNT]);
-    if (type === 'Set balance') balance = amount;
-    else if (type === 'Add funds') balance += amount;
-    else if (type === 'Joint') balance -= amount;
-    balance = round2_(balance);
-    if (r[C.TYPE] !== type || r[C.BALANCE] !== balance) changed = true;
+    if (type === 'Joint') joint += toNumber_(r[C.AMOUNT]);
+    const left = budget === null ? '' : round2_(budget - joint);
+    if (r[C.TYPE] !== type || r[C.BALANCE] !== left) changed = true;
     r[C.TYPE] = type;
-    r[C.BALANCE] = balance;
+    r[C.BALANCE] = left;
   });
   if (changed) {
     sheet.getRange(2, C.TYPE + 1, rows.length, 2).setValues(rows.map((r) => [r[C.TYPE], r[C.BALANCE]]));
-    sheet.getRange(2, C.BALANCE + 1, rows.length, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(2, C.BALANCE + 1, rows.length, 1).setNumberFormat(MONEY);
   }
   colorRows_(sheet, rows);
   return rows;
@@ -263,54 +351,65 @@ function colorRows_(sheet, rows) {
   if (changed) range.setBackgrounds(wanted);
 }
 
-function state_(sheet) {
-  const rows = recompute_(sheet);
-  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
-  const data = rows.filter((r) => !isEmptyRow_(r));
-  const all = periods_(rows);
-  const period = all.length ? all[all.length - 1] : emptyPeriod_();
-  writeSummary_(sheet, all, personalBudgets_(rows));
-  return {
-    ok: true,
-    version: BACKEND_VERSION,
-    balance: data.length ? data[data.length - 1][C.BALANCE] : 0,
-    hasBalance: period.since !== '',
-    personalBudgets: personalBudgets_(rows),
-    period: period,
-    recent: data.slice(-RECENT_COUNT).reverse().map((r) => ({
-      id: String(r[C.ID]),
-      date: formatDate_(r[C.DATE], tz),
-      category: String(r[C.CATEGORY]),
-      amount: toNumber_(r[C.AMOUNT]),
-      paidBy: String(r[C.PAID_BY]),
-      notes: String(r[C.NOTES]),
-      type: r[C.TYPE],
-      balance: r[C.BALANCE],
-      expenseFor: r[C.TYPE] === 'Personal' || r[C.TYPE] === 'Personal budget' ? owner_(r) : '',
-    })),
-  };
+function emptyPeriod_(key) {
+  // personal: net of Personal expenses paid on the other's card (positive = K owes V)
+  // pv / pk: Personal expenses for V / K in the month
+  // kOnK / vOnV on their own card (nothing owed), kOnV / vOnK on the other's card (owed in full)
+  return { month: key || '', since: key ? key + '-01' : '', hasBudget: false, start: 0, added: 0, spent: 0,
+    v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, pv: 0, pk: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0 };
 }
 
-// Each person's personal budget for a calendar month: the latest "Personal budget" row for that
-// person sets the amount and the month (its date). Every Personal expense for that person dated in
-// that month counts, whoever's card paid and whether it was logged before or after the budget.
-function personalBudgets_(rows) {
+// Totals for one month tab. Every row in the tab belongs to that month.
+function period_(rows, key) {
+  const p = emptyPeriod_(key);
+  let budget = null;
+  rows.filter((r) => !isEmptyRow_(r)).forEach((r) => {
+    const amount = toNumber_(r[C.AMOUNT]);
+    const type = normalizeType_(r[C.TYPE]);
+    if (type === 'Set balance') budget = amount;
+    if (type === 'Add funds') p.added += amount;
+    if (type === 'Joint') {
+      p.spent += amount;
+      if (r[C.PAID_BY] === 'V') p.v += amount;
+      if (r[C.PAID_BY] === 'K') p.k += amount;
+    }
+    if (type === 'Fixed') {
+      p.fixed += amount;
+      if (r[C.PAID_BY] === 'V') p.fv += amount;
+      if (r[C.PAID_BY] === 'K') p.fk += amount;
+    }
+    if (type === 'Personal') {
+      p.personal += personalOwed_(owner_(r), r[C.PAID_BY], amount);
+      const slot = { KK: 'kOnK', KV: 'kOnV', VV: 'vOnV', VK: 'vOnK' }[owner_(r) + r[C.PAID_BY]];
+      if (slot) p[slot] += amount;
+      if (owner_(r) === 'V') p.pv += amount;
+      if (owner_(r) === 'K') p.pk += amount;
+    }
+  });
+  p.hasBudget = budget !== null;
+  p.start = budget || 0;
+  Object.keys(p).forEach((k) => { if (typeof p[k] === 'number') p[k] = round2_(p[k]); });
+  return p;
+}
+
+// Each person's personal budget for the month: the latest "Personal budget" row in the tab sets it,
+// and every Personal expense for that person in the month counts, whoever's card paid.
+function personalBudgets_(rows, key) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const data = rows.filter((r) => !isEmptyRow_(r));
   const out = { V: null, K: null };
   data.forEach((r) => {
     const who = owner_(r);
-    if (r[C.TYPE] !== 'Personal budget' || (who !== 'V' && who !== 'K')) return;
+    if (normalizeType_(r[C.TYPE]) !== 'Personal budget' || (who !== 'V' && who !== 'K')) return;
     const date = formatDate_(r[C.DATE], tz);
-    // Latest by date; a later row on the same date replaces the earlier one.
     if (!out[who] || date >= out[who].setOn) {
-      out[who] = { month: date.slice(0, 7), since: date.slice(0, 7) + '-01', setOn: date, budget: toNumber_(r[C.AMOUNT]), spent: 0 };
+      out[who] = { month: key, since: key + '-01', setOn: date, budget: toNumber_(r[C.AMOUNT]), spent: 0 };
     }
   });
   data.forEach((r) => {
-    if (r[C.TYPE] !== 'Personal') return;
+    if (normalizeType_(r[C.TYPE]) !== 'Personal') return;
     const b = out[owner_(r)];
-    if (b && formatDate_(r[C.DATE], tz).slice(0, 7) === b.month) b.spent += toNumber_(r[C.AMOUNT]);
+    if (b) b.spent += toNumber_(r[C.AMOUNT]);
   });
   ['V', 'K'].forEach((who) => {
     const b = out[who];
@@ -319,53 +418,6 @@ function personalBudgets_(rows) {
     b.remaining = round2_(b.budget - b.spent);
   });
   return out;
-}
-
-function emptyPeriod_() {
-  // personal: net of Personal expenses paid on the other's card (positive = K owes V)
-  // pv / pk: Personal expenses for V / K during the period (for History)
-  // Personal expenses by whose expense and whose card: kOnK / vOnV on their own card (nothing owed),
-  // kOnV / vOnK on the other's card (owed in full)
-  return { since: '', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, pv: 0, pk: 0,
-    kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0 };
-}
-
-// One entry per budget period. A period starts at a "Set balance" row and runs until the next one.
-function periods_(rows) {
-  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
-  const list = [];
-  let p = null;
-  rows.filter((r) => !isEmptyRow_(r)).forEach((r) => {
-    const amount = toNumber_(r[C.AMOUNT]);
-    if (r[C.TYPE] === 'Set balance') {
-      p = emptyPeriod_();
-      p.since = formatDate_(r[C.DATE], tz);
-      p.start = amount;
-      list.push(p);
-      return;
-    }
-    if (!p) return; // rows before the first budget are not part of any period
-    if (r[C.TYPE] === 'Add funds') p.added += amount;
-    if (r[C.TYPE] === 'Joint') {
-      p.spent += amount;
-      if (r[C.PAID_BY] === 'V') p.v += amount;
-      if (r[C.PAID_BY] === 'K') p.k += amount;
-    }
-    if (r[C.TYPE] === 'Fixed') {
-      p.fixed += amount;
-      if (r[C.PAID_BY] === 'V') p.fv += amount;
-      if (r[C.PAID_BY] === 'K') p.fk += amount;
-    }
-    if (r[C.TYPE] === 'Personal') {
-      p.personal += personalOwed_(owner_(r), r[C.PAID_BY], amount);
-      const key = { KK: 'kOnK', KV: 'kOnV', VV: 'vOnV', VK: 'vOnK' }[owner_(r) + r[C.PAID_BY]];
-      if (key) p[key] += amount;
-      if (owner_(r) === 'V') p.pv += amount;
-      if (owner_(r) === 'K') p.pk += amount;
-    }
-  });
-  list.forEach((x) => Object.keys(x).forEach((k) => { if (typeof x[k] === 'number') x[k] = round2_(x[k]); }));
-  return list;
 }
 
 // A one-person expense paid on the other's card is owed back in full. Positive = K owes V.
@@ -401,23 +453,20 @@ function shares_(p) {
   return s;
 }
 
-// Rebuilds the tables in columns J onward: the same "Who owes whom" and "Fixed bills" tables
-// as the app, the monthly budget, a color legend, and a history row for every budget period.
-function writeSummary_(sheet, periods, personal) {
-  const WIDTH = 14; // J:W
-  const p = periods.length ? periods[periods.length - 1] : emptyPeriod_();
+// Columns J onward of a month tab: who owes whom, fixed bills, personal expenses, and the month's
+// budgets with what is left, plus a color legend.
+function writeMonthSummary_(sheet, key, p, pb) {
+  const WIDTH = 5; // J:N
   const s = shares_(p);
   const budget = round2_(p.start + p.added);
-  const pb = personal || { V: null, K: null };
+  const line = (...cells) => cells.concat(new Array(WIDTH - cells.length).fill(''));
+  const blank = () => line();
   const pbLine = (who) => {
     const b = pb[who];
-    return b ? line(who + ' personal', b.budget, b.spent, b.remaining, 'Since ' + b.since) : line(who + ' personal', 'not set');
+    return b ? line(who + ' personal', b.budget, b.spent, b.remaining) : line(who + ' personal', 'not set', who === 'V' ? p.pv : p.pk, '');
   };
-  const blank = () => new Array(WIDTH).fill('');
-  const line = (...cells) => cells.concat(new Array(WIDTH - cells.length).fill(''));
-
   const out = [
-    line('Who owes whom', '', '', p.since ? 'Since ' + p.since : 'No budget set'),    // 1
+    line('Who owes whom', '', '', monthLabel_(key)),                                  // 1
     line('V paid', 'K paid', 'Total'),                                                // 2
     line(p.v, p.k, p.spent),                                                          // 3
     line("V's share", "K's share", 'Equal split'),                                    // 4
@@ -438,9 +487,9 @@ function writeSummary_(sheet, periods, personal) {
     line('Settle up', s.personalSettle),                                              // 19
     line('Overall (joint + fixed + personal)', s.overall),                            // 20
     blank(),                                                                          // 21
-    line('Monthly budgets'),                                                          // 22
-    line('Budget for', 'Budget', 'Spent', 'Remaining'),                               // 23
-    line('Joint', budget, p.spent, round2_(budget - p.spent)),                        // 24
+    line('Budgets for ' + monthLabel_(key)),                                          // 22
+    line('Budget for', 'Budget', 'Spent', 'Left'),                                    // 23
+    p.hasBudget ? line('Joint', budget, p.spent, round2_(budget - p.spent)) : line('Joint', 'not set', p.spent, ''), // 24
     pbLine('V'),                                                                      // 25
     pbLine('K'),                                                                      // 26
     blank(),                                                                          // 27
@@ -450,22 +499,9 @@ function writeSummary_(sheet, periods, personal) {
     line('Personal K', 'expense for K'),                                              // 31
     line('Fixed V', "V's card"),                                                      // 32
     line('Fixed K', "K's card"),                                                      // 33
-    blank(),                                                                          // 34
   ];
-  const historyTitle = out.length + 1;
-  out.push(line('History'));
-  out.push(line('Since', 'Budget', 'Joint spent', 'V paid', 'K paid', "V's share", "K's share",
-    'Settle up', 'Fixed total', 'Fixed settle', 'Personal settle', 'Overall', 'V personal spent', 'K personal spent'));
-  const historyStart = out.length + 1;
-  periods.slice().reverse().forEach((x) => {
-    const h = shares_(x);
-    out.push([x.since, round2_(x.start + x.added), x.spent, x.v, x.k, h.vShare, h.kShare,
-      h.settle, x.fixed, h.fixedSettle, h.personalSettle, h.overall, x.pv, x.pk]);
-  });
-
   // Clear the whole area first: rows deleted near the top can shift old values and colors into it.
-  const last = Math.max(sheet.getLastRow(), out.length);
-  const area = sheet.getRange(1, SUMMARY_COL, last, WIDTH);
+  const area = sheet.getRange(1, SUMMARY_COL, Math.max(sheet.getLastRow(), out.length), WIDTH);
   area.clearContent();
   area.clearFormat();
   sheet.getRange(1, SUMMARY_COL, out.length, WIDTH).setValues(out);
@@ -474,21 +510,103 @@ function writeSummary_(sheet, periods, personal) {
   [3, 5, 12].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
   cell(17, 1, 2, 2).setNumberFormat(MONEY);
   cell(24, 1, 3, 3).setNumberFormat(MONEY);
-  [1, 10, 15, 22, 28, historyTitle].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
-  [2, 4, 11, 16, historyTitle + 1].forEach((row) => cell(row, 0, 1, row === historyTitle + 1 ? WIDTH : 3)
-    .setFontWeight('bold').setBackground('#f3f4f6'));
+  [1, 10, 15, 22, 28].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
+  [2, 4, 11, 16].forEach((row) => cell(row, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6'));
   cell(23, 0, 1, 4).setFontWeight('bold').setBackground('#f3f4f6');
+  cell(24, 3, 3, 1).setFontWeight('bold');
   cell(17, 0, 2, 1).setFontWeight('bold');
   [6, 7, 8, 13, 19, 20].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
   cell(30, 0).setBackground(COLORS.personalV);
   cell(31, 0).setBackground(COLORS.personalK);
   cell(32, 0).setBackground(COLORS.fixedV);
   cell(33, 0).setBackground(COLORS.fixedK);
-  if (periods.length) {
-    cell(historyStart, 1, periods.length, 6).setNumberFormat(MONEY);
-    cell(historyStart, 8, periods.length, 1).setNumberFormat(MONEY);
-    cell(historyStart, 12, periods.length, 2).setNumberFormat(MONEY);
+}
+
+// The "Sirikh" tab: one row per month, newest first. The last column is what was left of the
+// month's joint budget.
+function writeOverview_(months) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(OVERVIEW_TAB) || ss.insertSheet(OVERVIEW_TAB, 0);
+  const HEAD = ['Month', 'Tab', 'Joint budget', 'Joint spent', 'Fixed bills', 'V personal spent', 'K personal spent',
+    'V personal left', 'K personal left', 'Joint settle', 'Fixed settle', 'Personal settle', 'Overall settle', 'Joint left'];
+  const W = HEAD.length;
+  const line = (...cells) => cells.concat(new Array(W - cells.length).fill(''));
+  const out = [
+    line('Sirikh: month by month'),
+    line('Each month has its own tab. Budgets reset on the 1st. This tab is rebuilt on every save; do not type here.'),
+    line(),
+    HEAD,
+  ];
+  months.slice().reverse().forEach((m) => {
+    const p = m.p;
+    const s = shares_(p);
+    const budget = round2_(p.start + p.added);
+    const left = (b) => (b ? b.remaining : 'not set');
+    out.push([monthLabel_(m.key), tabName_(m.key), p.hasBudget ? budget : 'not set', p.spent, p.fixed, p.pv, p.pk,
+      left(m.pb.V), left(m.pb.K), s.settle, s.fixedSettle, s.personalSettle, s.overall,
+      p.hasBudget ? round2_(budget - p.spent) : 'not set']);
+  });
+  const area = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), out.length, 4), W);
+  area.clearContent();
+  area.clearFormat();
+  sheet.getRange(1, 1, out.length, W).setValues(out);
+  sheet.getRange(1, 1).setFontWeight('bold').setFontSize(14);
+  sheet.getRange(4, 1, 1, W).setFontWeight('bold').setBackground('#f3f4f6');
+  sheet.setFrozenRows(4);
+  if (months.length) {
+    sheet.getRange(5, 3, months.length, 7).setNumberFormat(MONEY);
+    sheet.getRange(5, W, months.length, 1).setNumberFormat(MONEY).setFontWeight('bold');
   }
+}
+
+// Recalculates the touched months (and writes their tables), rebuilds the overview, and returns
+// what the app shows for the current month.
+function state_(current, touched) {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const months = monthTabs_().map((t) => {
+    const hit = touched.indexOf(t.key) !== -1;
+    const rows = hit ? recompute_(t.sheet) : readRows_(t.sheet);
+    const p = period_(rows, t.key);
+    const pb = personalBudgets_(rows, t.key);
+    if (hit) writeMonthSummary_(t.sheet, t.key, p, pb);
+    return { key: t.key, rows: rows, p: p, pb: pb };
+  });
+  writeOverview_(months);
+  const cur = months.find((m) => m.key === current) || { key: current, rows: [], p: emptyPeriod_(current), pb: { V: null, K: null } };
+  const prev = months.find((m) => m.key === previousKey_(current));
+
+  // Latest entries across every month: newest date first, then most recently added.
+  const all = [];
+  months.forEach((m) => m.rows.forEach((r, i) => { if (!isEmptyRow_(r)) all.push({ r: r, key: m.key, i: i, d: formatDate_(r[C.DATE], tz) }); }));
+  all.sort((a, b) => (a.d !== b.d ? (a.d < b.d ? 1 : -1) : a.key !== b.key ? (a.key < b.key ? 1 : -1) : b.i - a.i));
+
+  const budget = round2_(cur.p.start + cur.p.added);
+  return {
+    ok: true,
+    version: BACKEND_VERSION,
+    month: current,
+    balance: cur.p.hasBudget ? round2_(budget - cur.p.spent) : 0,
+    hasBalance: cur.p.hasBudget,
+    period: cur.p,
+    personalBudgets: cur.pb,
+    // Start-of-month prompt: the joint budget, and personal budgets that existed last month.
+    needsBudget: {
+      joint: !cur.p.hasBudget,
+      V: !cur.pb.V && !!(prev && prev.pb.V),
+      K: !cur.pb.K && !!(prev && prev.pb.K),
+    },
+    recent: all.slice(0, RECENT_COUNT).map((x) => ({
+      id: String(x.r[C.ID]),
+      date: x.d,
+      category: String(x.r[C.CATEGORY]),
+      amount: toNumber_(x.r[C.AMOUNT]),
+      paidBy: String(x.r[C.PAID_BY]),
+      notes: String(x.r[C.NOTES]),
+      type: normalizeType_(x.r[C.TYPE]),
+      balance: x.r[C.BALANCE],
+      expenseFor: ['Personal', 'Personal budget'].indexOf(normalizeType_(x.r[C.TYPE])) !== -1 ? owner_(x.r) : '',
+    })),
+  };
 }
 
 function normalizeType_(v) {
