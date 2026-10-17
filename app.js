@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 21; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 22; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
@@ -1545,7 +1545,10 @@
   function fundsEstimate() {
     const st = getState() || {};
     const month = currentMonth();
-    const base = st.funds ? JSON.parse(JSON.stringify(st.funds)) : null;
+    // Only use what the sheet sent if it has the current shape (version 20 or later). An older
+    // script sends Funds data in another shape; the page then starts empty instead of breaking.
+    const usable = !!(st.funds && st.funds.now && st.funds.now.savings && st.funds.now.spent && st.funds.available);
+    const base = usable ? JSON.parse(JSON.stringify(st.funds)) : null;
     let f;
     if (base && base.month === month && base.now) {
       f = base;
@@ -1611,8 +1614,8 @@
       if (e.type === 'Joint' || e.type === 'Fixed') spend(e.date, e.type.toLowerCase(), 'Both', sign * e.amount);
       if (e.type === 'Personal') spend(e.date, 'personal', e.expenseFor || e.paidBy, sign * e.amount);
     }
-    const r2 = (o) => { for (const k of Object.keys(o)) if (typeof o[k] === 'number') o[k] = round2(o[k]); return o; };
-    ['income', 'shared', 'personal', 'sonata', 'loan', 'spent', 'invest', 'savings', 'kept', 'investSaved', 'used'].forEach((k) => r2(n[k]));
+    const r2 = (o) => { if (!o) return o; for (const k of Object.keys(o)) if (typeof o[k] === 'number') o[k] = round2(o[k]); return o; };
+    ['income', 'shared', 'personal', 'sonata', 'loan', 'spent', 'invest', 'savings', 'kept', 'investSaved', 'used'].forEach((k) => { n[k] = r2(n[k] || trio()); });
     r2(f.available);
     for (const k of ['joint', 'fixed', 'sonataShared']) n[k] = round2(n[k]);
     const rateOf = (k, inc) => (inc > 0 ? round2((k / inc) * 100) : null);
@@ -1665,6 +1668,8 @@
     return f;
   }
   const hasFunds = () => !!((getState() || {}).funds || {}).hasEntries || getQueue().some((op) => op.table === 'funds');
+  // Funds needs the sheet's script at version 20; older ones are told apart by the version in the last reply.
+  const fundsOutdated = () => { const st = getState(); return !!st && st.version !== undefined && st.version < 20; };
 
   function cell(tr, text, cls, tag) {
     const td = document.createElement(tag || 'td');
@@ -1692,6 +1697,12 @@
   }
 
   function renderMoney() {
+    const st0 = getState();
+    $('mOutdated').hidden = !fundsOutdated();
+    if (fundsOutdated()) {
+      $('mOutdated').textContent = `Funds needs the sheet's script at version 20; yours is version ${st0.version}. In Apps Script: paste the latest Code.gs, ` +
+        'run weeklyRecap once to approve, then Deploy > Manage deployments > pencil > New version > Deploy. Anything you save here waits on this phone (hourglass) and sends by itself after that.';
+    }
     const f = fundsEstimate();
     const n = f.now;
     const ready = hasFunds();
