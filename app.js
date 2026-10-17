@@ -2,10 +2,10 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 18; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 19; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
-  const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set' };
+  const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
   const TYPE_HINTS = {
     Joint: 'Joint: shared day-to-day spending. Comes out of the monthly budget and counts in who owes whom.',
     Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
@@ -15,6 +15,7 @@
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
   function colorClass(r) {
+    if (r.type === 'Settlement' || r.category === 'Settlement') return 'c-settled';
     if (r.type === 'Personal') return (r.expenseFor || r.paidBy) === 'K' ? 'c-personal-k' : 'c-personal-v';
     if (r.type === 'Fixed') return r.paidBy === 'K' ? 'c-fixed-k' : 'c-fixed-v';
     return '';
@@ -25,8 +26,9 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
-    if (op.table === 'car') return op.op === 'add' ? 15 : 9;
+    if (op.table === 'car') return op.op !== 'add' ? 9 : op.entry.category === 'Settlement' ? 18 : 15;
     if (op.op !== 'add') return 0;
+    if (op.entry.type === 'Settlement') return 18;
     if (op.entry.type === 'Personal budget') return 10;
     if (op.entry.type === 'Personal') return 9;
     return op.entry.type === 'Fixed' ? 7 : 0;
@@ -140,11 +142,15 @@
     const p = { month, since: month + '-01', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0,
       kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0, ...(state && state.period) };
     let hasBalance = state ? !!state.hasBalance : false;
-    const sameMonth = (e) => e && String(e.date).slice(0, 7) === month;
+    const sameMonth = (e) => e && String(e.month || e.date).slice(0, 7) === month;
 
     const apply = (e, sign) => {
       const amt = sign * e.amount;
       if (e.type === 'Add funds') p.added += amt;
+      if (e.type === 'Settlement') {
+        p.settled = (p.settled || 0) + amt;
+        p.settledNet = (p.settledNet || 0) + (e.paidBy === 'K' ? amt : -amt);
+      }
       if (e.type === 'Joint') {
         p.spent += amt;
         if (e.paidBy === 'V') p.v += amt;
@@ -175,7 +181,7 @@
         if (sameMonth(e)) apply(e, -1);
       }
     }
-    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'personal', 'kOnK', 'kOnV', 'vOnV', 'vOnK']) p[k] = round2(p[k] || 0);
+    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'personal', 'kOnK', 'kOnV', 'vOnV', 'vOnK', 'settled', 'settledNet']) p[k] = round2(p[k] || 0);
     const balance = hasBalance ? round2(p.start + p.added - p.spent) : 0;
     return { balance, hasBalance, unsynced: queue.length, period: p };
   }
@@ -292,11 +298,39 @@
     $('pSplitSince').textContent = 'Since ' + prettyDate(p.since);
     $('pSettle').textContent = settleText(pn, -pn);
     $('pOverall').textContent = overall;
+
+    // After settlements (Splitwise, cash...): what is still owed, or Cleared.
+    const net = round2(vShare + fvShare + pn);
+    const status = statusOf(net, p.settledNet || 0, p.settled || 0);
+    for (const id of ['statusLine', 'pStatus']) {
+      $(id).textContent = status.text;
+      $(id).className = 'status ' + status.kind;
+    }
+    renderOlderOpen();
     if (!hasFixed) return;
     $('fixedV').textContent = money(p.fv);
     $('fixedK').textContent = money(p.fk);
     $('fixedTotal').textContent = money(p.fixed);
     $('fixedSettle').textContent = settleText(fvShare, fkShare);
+  }
+
+  // net: what is owed before settlements (positive = K owes V); settledNet: positive = K paid V.
+  function statusOf(net, settledNet, settled) {
+    const remaining = round2(net - settledNet);
+    const paid = settled ? (settledNet > 0 ? `K paid V ${money(settledNet)}` : settledNet < 0 ? `V paid K ${money(-settledNet)}` : `${money(settled)} both ways`) : '';
+    if (Math.abs(remaining) < 0.01) {
+      return settled ? { kind: 'cleared', text: `Cleared · ${paid}`, remaining: 0 } : { kind: 'even', text: 'Nothing owed', remaining: 0 };
+    }
+    return { kind: 'open', text: `Still owed: ${settleText(remaining, -remaining)}` + (paid ? ` (after ${paid})` : ''), remaining };
+  }
+
+  // Earlier months that still have money owed.
+  function renderOlderOpen() {
+    const st = getState();
+    const older = ((st && st.unsettled) || []).filter((u) => u.month !== currentMonth());
+    const el = $('olderOpen');
+    el.hidden = !older.length;
+    el.textContent = older.map((u) => `${u.label} still open: ${settleText(u.remaining, -u.remaining)}`).join(' · ');
   }
 
   function settleText(vShare, kShare) {
@@ -327,7 +361,7 @@
     }
     for (const r of rows) {
       const li = document.createElement('li');
-      li.className = [isCar ? 'c-car' : colorClass(r), r.pending ? 'pending' : ''].filter(Boolean).join(' ');
+      li.className = [isCar && r.category !== 'Settlement' ? 'c-car' : colorClass(r), r.pending ? 'pending' : ''].filter(Boolean).join(' ');
 
       const body = document.createElement('div');
       body.className = 'body';
@@ -346,9 +380,12 @@
       tag.textContent = isCar ? r.category : TYPE_LABELS[r.type] || r.type || 'Joint';
       const owner = r.expenseFor && r.expenseFor !== 'Both' ? r.expenseFor : '';
       const parts = [prettyDate(r.date)];
-      if (isCar && r.expenseFor === 'Joint') parts.push('Joint');
+      const isSettlement = r.type === 'Settlement' || r.category === 'Settlement';
+      if (isSettlement) parts.push(`${r.paidBy} paid ${r.paidBy === 'V' ? 'K' : 'V'}`);
+      else if (isCar && r.expenseFor === 'Joint') parts.push('Joint');
       else if (owner && (r.type === 'Personal' || (isCar && owner !== r.paidBy))) parts.push(`for ${owner}`);
-      if (r.paidBy === 'V' || r.paidBy === 'K') parts.push(`${r.paidBy}'s card`);
+      if (isSettlement) { /* who paid whom is already shown */ }
+      else if (r.paidBy === 'V' || r.paidBy === 'K') parts.push(`${r.paidBy}'s card`);
       else if (r.paidBy) parts.push(`by ${r.paidBy}`);
       if (isCar && r.category === 'Fuel') {
         if (r.fill === 'Partial') parts.push('partial');
@@ -358,7 +395,7 @@
         if (r.gallons !== undefined && r.gallons !== '') parts.push(`${r.gallons} gal`);
       }
       parts.push(r.notes);
-      if (!isCar && r.balance !== undefined && r.balance !== '') parts.push('joint left ' + money(r.balance));
+      if (!isCar && !isSettlement && r.balance !== undefined && r.balance !== '') parts.push('joint left ' + money(r.balance));
       sub.append(tag, document.createTextNode(parts.filter(Boolean).join(' · ')));
       body.append(top, sub);
       li.appendChild(body);
@@ -474,6 +511,130 @@
   $('promptPersonal').addEventListener('click', () => $('setPersonalBtn').click());
   $('promptLater').addEventListener('click', () => { store.set('promptDismissed', currentMonth()); renderMonthPrompt(); });
 
+  // ---------- Record a settlement (Splitwise, cash...)
+  const settleDialog = $('settleDialog');
+  let settleTable = 'main';
+
+  // What is still owed for a month (positive = K owes V), including changes not synced yet.
+  function remainingFor(month) {
+    if (settleTable === 'car') {
+      const c = (getState() || {}).car || {};
+      let r = c.remaining !== undefined ? c.remaining : c.owed || 0;
+      for (const op of getQueue()) {
+        if (op.table !== 'car' || op.op !== 'add') continue;
+        const e = op.entry;
+        if (e.category === 'Settlement') r -= e.paidBy === 'K' ? e.amount : -e.amount;
+        else r += carOwed(e.expenseFor || e.paidBy, e.paidBy, e.amount);
+      }
+      return round2(r);
+    }
+    if (month === currentMonth()) {
+      const p = estimate().period;
+      const split = round2(p.spent / 2), fSplit = round2(p.fixed / 2);
+      return round2((p.v - split) + (p.fv - fSplit) + (p.personal || 0) - (p.settledNet || 0));
+    }
+    const u = (((getState() || {}).unsettled) || []).find((x) => x.month === month);
+    let r = u ? u.remaining : 0;
+    for (const op of getQueue()) {
+      if (op.op === 'add' && op.table !== 'car' && op.entry.type === 'Settlement' && op.entry.month === month) {
+        r -= op.entry.paidBy === 'K' ? op.entry.amount : -op.entry.amount;
+      }
+    }
+    return round2(r);
+  }
+
+  function fillSettleAmount() {
+    const r = remainingFor($('settleMonth').value);
+    $('settleWho').value = r < 0 ? 'V' : 'K';
+    $('settleAmount').value = Math.abs(r) >= 0.01 ? Math.abs(r).toFixed(2) : '';
+    updateSettleOwed();
+  }
+
+  // What is left after the payment being typed: partial, cleared, or more than is owed.
+  function settleAfter() {
+    const r = remainingFor($('settleMonth').value);
+    const amt = parseAmount($('settleAmount').value) || 0;
+    return { r, amt, after: round2(r - ($('settleWho').value === 'K' ? amt : -amt)) };
+  }
+  const overpaid = ({ r, after }) => Math.abs(after) >= 0.01 && (Math.abs(r) < 0.01 || Math.sign(after) !== Math.sign(r));
+
+  function updateSettleOwed() {
+    const x = settleAfter();
+    let text = Math.abs(x.r) >= 0.01 ? `Still owed: ${settleText(x.r, -x.r)}.` : 'Nothing is owed for this right now.';
+    if (x.amt) {
+      if (Math.abs(x.after) < 0.01) text += ' This payment clears it.';
+      else if (overpaid(x)) text += ` That is more than is owed: afterwards ${settleText(x.after, -x.after)}.`;
+      else text += ` After this: ${settleText(x.after, -x.after)} (partial).`;
+    }
+    $('settleOwed').textContent = text;
+    $('settleOwed').classList.toggle('warn', !!x.amt && overpaid(x));
+  }
+
+  function openSettle(table) {
+    settleTable = table;
+    $('settleForm').reset();
+    clearInvalid($('settleForm'));
+    $('settleDate').value = today();
+    const select = $('settleMonth');
+    select.innerHTML = '';
+    if (table === 'car') {
+      const opt = document.createElement('option');
+      opt.value = 'car';
+      opt.textContent = 'Sonata (car costs)';
+      select.appendChild(opt);
+    } else {
+      const open = ((getState() || {}).unsettled || []).map((u) => u.month);
+      const months = [currentMonth(), ...open.filter((m) => m !== currentMonth())];
+      for (const m of months) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = monthName(m) + ' ' + m.slice(0, 4);
+        select.appendChild(opt);
+      }
+      // Default: the oldest month still owed, else this month.
+      const older = open.filter((m) => m !== currentMonth());
+      select.value = older.length ? older[older.length - 1] : currentMonth();
+    }
+    $('settleMonthField').hidden = table === 'car';
+    fillSettleAmount();
+    settleDialog.showModal();
+  }
+  $('settleBtn').addEventListener('click', () => openSettle('main'));
+  $('pSettleBtn').addEventListener('click', () => openSettle('main'));
+  $('carSettleBtn').addEventListener('click', () => openSettle('car'));
+  $('settleMonth').addEventListener('change', fillSettleAmount);
+  $('settleWho').addEventListener('change', updateSettleOwed);
+  $('settleAmount').addEventListener('input', () => { $('settleAmount').classList.remove('invalid'); updateSettleOwed(); });
+
+  $('settleForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (e.submitter && e.submitter.value === 'cancel') return settleDialog.close();
+    const amount = parseAmount($('settleAmount').value);
+    if (amount === null || amount <= 0) return $('settleAmount').classList.add('invalid');
+    const date = $('settleDate').value;
+    if (!date) return $('settleDate').classList.add('invalid');
+    // Overpay guard: a payment past what is owed would flip the debt to the other person.
+    const x = settleAfter();
+    if (overpaid(x)) {
+      const owedText = Math.abs(x.r) < 0.01 ? 'Nothing is owed' : `Only ${money(Math.abs(x.r))} is owed`;
+      if (!confirm(`${owedText}. Recording ${money(amount)} would leave ${settleText(x.after, -x.after)}. Record it anyway?`)) return;
+    }
+    settleDialog.close();
+    const who = $('settleWho').value;
+    const method = $('settleMethod').value;
+    const notes = $('settleNotes').value.trim();
+    if (settleTable === 'car') {
+      enqueue({ op: 'add', table: 'car', entry: { id: uuid(), date, category: 'Settlement', vendor: '', amount, paidBy: who, method, notes,
+        odometer: '', rangeLeft: '', gallons: '', pricePerGallon: '', fill: '', missedBefore: false } });
+    } else {
+      enqueue({ op: 'add', entry: { id: uuid(), date, month: $('settleMonth').value, category: '', amount, paidBy: who,
+        expenseFor: who === 'V' ? 'K' : 'V', method, notes, type: 'Settlement' } });
+    }
+    const status = await sync();
+    report(status, `Settlement recorded ✓ ${who === 'K' ? 'K paid V' : 'V paid K'} ${money(amount)} via ${method}` +
+      (Math.abs(x.after) < 0.01 ? ' · cleared' : ` · still owed: ${settleText(x.after, -x.after)}`));
+  });
+
   const personalDialog = $('personalDialog');
   $('setPersonalBtn').addEventListener('click', () => {
     $('personalForm').reset();
@@ -575,10 +736,17 @@
     let v = c ? c.v : 0;
     let k = c ? c.k : 0;
     let owed = c ? c.owed || 0 : 0;
+    let settledNet = c ? c.settledNet || 0 : 0;
+    let settled = c ? c.settled || 0 : 0;
     const turns = { V: 0, K: 0, Joint: 0, ...((c && c.turns) || {}) };
     for (const op of getQueue()) {
       if (op.table !== 'car' || op.op !== 'add') continue;
       const e = op.entry;
+      if (e.category === 'Settlement') {
+        settled += e.amount;
+        settledNet += e.paidBy === 'K' ? e.amount : -e.amount;
+        continue;
+      }
       if (e.paidBy === 'V') v += e.amount;
       if (e.paidBy === 'K') k += e.amount;
       const owner = e.expenseFor || e.paidBy;
@@ -589,7 +757,9 @@
     $('carPaidV').textContent = money(round2(v));
     $('carPaidK').textContent = money(round2(k));
     $('carPaidTotal').textContent = money(round2(v + k));
-    $('carSettle').textContent = Math.abs(owed) < 0.01 ? 'Nothing owed for the car' : settleText(owed, -owed);
+    const carStatus = statusOf(owed, round2(settledNet), round2(settled));
+    $('carSettle').textContent = carStatus.text;
+    $('carSettle').className = 'settle status ' + carStatus.kind;
     $('carTurns').textContent = `Fill-ups by turn: V ${turns.V} · K ${turns.K} · Joint ${turns.Joint}`;
 
     const cats = $('carCategories');
@@ -1004,7 +1174,7 @@
     input.focus();
     showBanner(message, 'err');
   }
-  for (const id of ['date', 'category', 'amount', 'odometer', 'fundsAmount', 'fundsDate', 'pbAmountV', 'pbAmountK', 'pbDate', 'scriptUrl', 'secretKey']) {
+  for (const id of ['date', 'category', 'amount', 'odometer', 'fundsAmount', 'fundsDate', 'pbAmountV', 'pbAmountK', 'pbDate', 'settleAmount', 'settleDate', 'scriptUrl', 'secretKey']) {
     $(id).addEventListener('input', () => $(id).classList.remove('invalid'));
   }
 

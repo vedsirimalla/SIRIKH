@@ -119,6 +119,18 @@ main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
 .recent li { border-left: 5px solid var(--row, transparent); padding-left: 8px; }
 .recent li[class*="c-"] .tag { background: var(--row); color: #1c1917; }
 .c-car { --row: #c7d2fe; }
+.c-settled { --row: #bbf7d0; }
+
+/* Settlements */
+.status { margin: 8px 0 4px; padding: 8px 10px; border-radius: 8px; font-weight: 700; }
+.status:empty { display: none; }
+.status.cleared { background: #bbf7d0; color: #14532d; }
+.status.open { background: #fef3c7; color: #78350f; }
+.status.even { background: var(--field); color: var(--muted); font-weight: 600; }
+.settle.status { font-size: 15px; }
+.older-open { margin-top: 4px; }
+.settle-owed { font-weight: 700; margin: 0 0 12px; }
+.settle-owed.warn { color: var(--warn); }
 
 /* Sonata2026 */
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px; }

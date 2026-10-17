@@ -25,6 +25,9 @@
  *   Set balance      the month's joint budget
  *   Personal budget  the month's personal budget for V or K (Expense For)
  *   Add funds        adds to the month's joint budget (only from hand edits)
+ *   Settlement       money one person paid the other to clear what was owed (Splitwise, cash...).
+ *                    Card Used = who paid, Expense For = who received. Not an expense: it never
+ *                    touches budgets or spending, only the month's Settled / Status lines (green rows).
  * Budgets are per calendar month and reset on the 1st (nothing carries over). The latest budget
  * row in a month sets the amount, and every expense dated in that month counts against it, even
  * one logged before the budget was set. Joint Left ($) is the joint budget minus the joint
@@ -43,16 +46,19 @@ const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
   'October', 'November', 'December'];
 const MONTH_TAB_RE = /^Sirikh (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 17;
+const BACKEND_VERSION = 18;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
-const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget'];
+const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget', 'Settlement'];
+const SETTLE_METHODS = ['Splitwise', 'Cash', 'Zelle', 'Venmo', 'Other'];
 // Row colors: Personal in blues by whose expense, Fixed bills in oranges by whose card (V lighter, K darker).
 const COLORS = {
   personalV: '#dbeafe',
   personalK: '#93c5fd',
   fixedV: '#fed7aa',
   fixedK: '#fb923c',
+  settled: '#bbf7d0', // settlement rows and "Cleared"
+  open: '#fef3c7',    // "Open" (still owed)
 };
 const MONEY = '$#,##0.00';
 const RECENT_COUNT = 5;
@@ -81,7 +87,7 @@ function doPost(e) {
         else {
           const entry = validate_(body.entry || {});
           addEntry_(entry);
-          touched.push(entry.date.slice(0, 7));
+          touched.push(entry.month || entry.date.slice(0, 7));
         }
       } else if (body.action === 'delete') {
         if (isCar) deleteCar_(carSheet, String(body.id || ''));
@@ -191,6 +197,7 @@ function validate_(b) {
   const type = TYPES.indexOf(b.type) !== -1 ? b.type : 'Joint';
   const isFunds = type === 'Add funds' || type === 'Set balance';
   const isPersonalBudget = type === 'Personal budget';
+  const isSettlement = type === 'Settlement';
 
   const date = String(b.date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Invalid date.');
@@ -199,6 +206,7 @@ function validate_(b) {
   if (!isFinite(amount)) throw new Error('Invalid amount.');
   if (amount === 0 && type !== 'Set balance') throw new Error('Amount cannot be 0.');
   if (isPersonalBudget && amount < 0) throw new Error('A budget cannot be negative.');
+  if (isSettlement && amount <= 0) throw new Error('A settlement must be more than 0.');
 
   // A personal budget belongs to one person; there is no card involved.
   const paidBy = isPersonalBudget ? String(b.expenseFor || '') : String(b.paidBy || '');
@@ -210,10 +218,16 @@ function validate_(b) {
     expenseFor = b.expenseFor === undefined || b.expenseFor === '' ? paidBy : String(b.expenseFor);
     if (expenseFor !== 'V' && expenseFor !== 'K') throw new Error('Expense for must be V or K.');
   }
+  // A settlement goes from the payer (Card Used) to the other person (Expense For).
+  const method = SETTLE_METHODS.indexOf(b.method) !== -1 ? b.method : 'Splitwise';
+  if (isSettlement) expenseFor = paidBy === 'V' ? 'K' : 'V';
+  // The month a settlement clears (it may be paid in a later month).
+  const month = isSettlement && /^\d{4}-\d{2}$/.test(String(b.month || '')) ? String(b.month) : date.slice(0, 7);
 
   let category = String(b.category || '').trim();
   if (!category) {
     if (isPersonalBudget) category = expenseFor + "'s personal budget";
+    else if (isSettlement) category = 'Settled via ' + method;
     else if (!isFunds) throw new Error('Category is required.');
     else category = type === 'Set balance' ? 'Balance set' : 'Funds added';
   }
@@ -227,6 +241,7 @@ function validate_(b) {
     notes: safeText_(String(b.notes || '').trim().slice(0, 500)),
     type: type,
     expenseFor: expenseFor,
+    month: month,
   };
 }
 
@@ -236,7 +251,7 @@ function safeText_(s) {
 }
 
 function addEntry_(entry) {
-  const sheet = monthSheet_(entry.date.slice(0, 7), true);
+  const sheet = monthSheet_(entry.month || entry.date.slice(0, 7), true);
   // Retries from the phone's offline queue reuse the same id; save once.
   if (ids_(sheet).indexOf(entry.id) !== -1) return;
   const row = nextRow_(sheet);
@@ -321,14 +336,58 @@ function recompute_(sheet) {
     sheet.getRange(2, C.TYPE + 1, rows.length, 2).setValues(rows.map((r) => [r[C.TYPE], r[C.BALANCE]]));
     sheet.getRange(2, C.BALANCE + 1, rows.length, 1).setNumberFormat(MONEY);
   }
+  const key = keyOfTab_(sheet.getName());
+  if (key) {
+    labelSettlements_(sheet, rows, shares_(period_(rows, key)).owedNet,
+      { amount: C.AMOUNT, payer: C.PAID_BY, label: C.CATEGORY }, (r) => normalizeType_(r[C.TYPE]) === 'Settlement');
+  }
   colorRows_(sheet, rows);
   return rows;
+}
+
+// Numbers settlements in row order against what was owed: "Settlement 1 (partial) via Splitwise",
+// ..., "Settlement 3 (final, cleared) via Zelle", or "Settlement (paid in full) via Cash" for one
+// payment that clears it. "overpaid" / "extra" flag a payment past what was owed.
+function settlementLabels_(items, owedNet) {
+  let cum = 0;
+  return items.map((it, i) => {
+    const delta = it.payer === 'K' ? it.amount : -it.amount;
+    const before = round2_(owedNet - cum);
+    cum += delta;
+    const after = round2_(owedNet - cum);
+    let tag;
+    if (Math.abs(before) < 0.01) tag = 'extra';
+    else if (Math.abs(after) < 0.01) tag = items.length === 1 ? 'paid in full' : 'final, cleared';
+    else if (Math.sign(after) !== Math.sign(before)) tag = 'overpaid';
+    else tag = 'partial';
+    return (tag === 'paid in full' ? 'Settlement' : 'Settlement ' + (i + 1)) + ' (' + tag + ') via ' + it.method;
+  });
+}
+
+// Rewrites the label cell of each settlement row when its number or status changed.
+// cols = 0-based columns of the amount, the payer and the label.
+function labelSettlements_(sheet, rows, owedNet, cols, isSettlement) {
+  const idx = [];
+  rows.forEach((r, i) => { if (!isEmptyRow_(r) && isSettlement(r)) idx.push(i); });
+  if (!idx.length) return;
+  const items = idx.map((i) => {
+    const m = /via (.+)$/.exec(String(rows[i][cols.label]));
+    return { amount: toNumber_(rows[i][cols.amount]), payer: String(rows[i][cols.payer]), method: m ? m[1] : 'Splitwise' };
+  });
+  settlementLabels_(items, owedNet).forEach((label, n) => {
+    const r = rows[idx[n]];
+    if (r[cols.label] !== label) {
+      r[cols.label] = label;
+      sheet.getRange(idx[n] + 2, cols.label + 1).setValue(label);
+    }
+  });
 }
 
 function rowColor_(r) {
   if (isEmptyRow_(r)) return null;
   if (r[C.TYPE] === 'Personal') return owner_(r) === 'K' ? COLORS.personalK : COLORS.personalV;
   if (r[C.TYPE] === 'Fixed') return r[C.PAID_BY] === 'K' ? COLORS.fixedK : COLORS.fixedV;
+  if (r[C.TYPE] === 'Settlement') return COLORS.settled;
   return null; // Joint and budget rows stay plain
 }
 
@@ -356,7 +415,9 @@ function emptyPeriod_(key) {
   // pv / pk: Personal expenses for V / K in the month
   // kOnK / vOnV on their own card (nothing owed), kOnV / vOnK on the other's card (owed in full)
   return { month: key || '', since: key ? key + '-01' : '', hasBudget: false, start: 0, added: 0, spent: 0,
-    v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, pv: 0, pk: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0 };
+    v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, pv: 0, pk: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0,
+    // settlements: total paid, and the net that clears "K owes V" (positive = K paid V)
+    settled: 0, settledNet: 0 };
 }
 
 // Totals for one month tab. Every row in the tab belongs to that month.
@@ -377,6 +438,10 @@ function period_(rows, key) {
       p.fixed += amount;
       if (r[C.PAID_BY] === 'V') p.fv += amount;
       if (r[C.PAID_BY] === 'K') p.fk += amount;
+    }
+    if (type === 'Settlement') {
+      p.settled += amount;
+      p.settledNet += r[C.PAID_BY] === 'K' ? amount : -amount;
     }
     if (type === 'Personal') {
       p.personal += personalOwed_(owner_(r), r[C.PAID_BY], amount);
@@ -450,11 +515,19 @@ function shares_(p) {
   s.fixedSettle = settleText_(s.fvShare, s.fkShare);
   s.personalSettle = settleText_(pn, -pn);
   s.overall = settleText_(round2_(s.vShare + s.fvShare + pn), round2_(s.kShare + s.fkShare - pn));
+  // What is left after settlements (positive = K owes V).
+  s.owedNet = round2_(s.vShare + s.fvShare + pn);
+  s.remaining = round2_(s.owedNet - (p.settledNet || 0));
+  s.stillOwed = settleText_(s.remaining, -s.remaining);
+  s.settledText = !p.settled ? 'None yet'
+    : p.settledNet > 0 ? 'K paid V $' + p.settledNet.toFixed(2)
+    : p.settledNet < 0 ? 'V paid K $' + (-p.settledNet).toFixed(2) : '$' + p.settled.toFixed(2) + ' both ways';
+  s.status = Math.abs(s.remaining) < 0.01 ? (p.settled ? 'Cleared' : 'Even') : 'Open: ' + s.stillOwed;
   return s;
 }
 
-// Columns J onward of a month tab: who owes whom, fixed bills, personal expenses, and the month's
-// budgets with what is left, plus a color legend.
+// Columns J onward of a month tab: who owes whom (with settlements and status), fixed bills,
+// personal expenses, and the month's budgets with what is left, plus a color legend.
 function writeMonthSummary_(sheet, key, p, pb) {
   const WIDTH = 5; // J:N
   const s = shares_(p);
@@ -474,31 +547,34 @@ function writeMonthSummary_(sheet, key, p, pb) {
     line('Settle up (joint)', s.settle),                                              // 6
     line("Personal on other's card", s.personalSettle),                               // 7
     line('Overall (joint + fixed + personal)', s.overall),                            // 8
-    blank(),                                                                          // 9
-    line('Fixed bills'),                                                              // 10
-    line('V paid', 'K paid', 'Total'),                                                // 11
-    line(p.fv, p.fk, p.fixed),                                                        // 12
-    line('Settle up', s.fixedSettle),                                                 // 13
-    blank(),                                                                          // 14
-    line('Personal expenses'),                                                        // 15
-    line('', 'Own card', "Other's card (owed in full)"),                              // 16
-    line("K's expenses", p.kOnK, p.kOnV),                                             // 17
-    line("V's expenses", p.vOnV, p.vOnK),                                             // 18
-    line('Settle up', s.personalSettle),                                              // 19
-    line('Overall (joint + fixed + personal)', s.overall),                            // 20
-    blank(),                                                                          // 21
-    line('Budgets for ' + monthLabel_(key)),                                          // 22
-    line('Budget for', 'Budget', 'Spent', 'Left'),                                    // 23
-    p.hasBudget ? line('Joint', budget, p.spent, round2_(budget - p.spent)) : line('Joint', 'not set', p.spent, ''), // 24
-    pbLine('V'),                                                                      // 25
-    pbLine('K'),                                                                      // 26
-    blank(),                                                                          // 27
-    line('Colors'),                                                                   // 28
-    line('Joint', 'no color'),                                                        // 29
-    line('Personal V', 'expense for V'),                                              // 30
-    line('Personal K', 'expense for K'),                                              // 31
-    line('Fixed V', "V's card"),                                                      // 32
-    line('Fixed K', "K's card"),                                                      // 33
+    line('Settled (Splitwise, cash...)', s.settledText),                              // 9
+    line('Status', s.status),                                                         // 10
+    blank(),                                                                          // 11
+    line('Fixed bills'),                                                              // 12
+    line('V paid', 'K paid', 'Total'),                                                // 13
+    line(p.fv, p.fk, p.fixed),                                                        // 14
+    line('Settle up', s.fixedSettle),                                                 // 15
+    blank(),                                                                          // 16
+    line('Personal expenses'),                                                        // 17
+    line('', 'Own card', "Other's card (owed in full)"),                              // 18
+    line("K's expenses", p.kOnK, p.kOnV),                                             // 19
+    line("V's expenses", p.vOnV, p.vOnK),                                             // 20
+    line('Settle up', s.personalSettle),                                              // 21
+    line('Overall (joint + fixed + personal)', s.overall),                            // 22
+    blank(),                                                                          // 23
+    line('Budgets for ' + monthLabel_(key)),                                          // 24
+    line('Budget for', 'Budget', 'Spent', 'Left'),                                    // 25
+    p.hasBudget ? line('Joint', budget, p.spent, round2_(budget - p.spent)) : line('Joint', 'not set', p.spent, ''), // 26
+    pbLine('V'),                                                                      // 27
+    pbLine('K'),                                                                      // 28
+    blank(),                                                                          // 29
+    line('Colors'),                                                                   // 30
+    line('Joint', 'no color'),                                                        // 31
+    line('Personal V', 'expense for V'),                                              // 32
+    line('Personal K', 'expense for K'),                                              // 33
+    line('Fixed V', "V's card"),                                                      // 34
+    line('Fixed K', "K's card"),                                                      // 35
+    line('Settlement', 'paid back'),                                                  // 36
   ];
   // Clear the whole area first: rows deleted near the top can shift old values and colors into it.
   const area = sheet.getRange(1, SUMMARY_COL, Math.max(sheet.getLastRow(), out.length), WIDTH);
@@ -507,43 +583,50 @@ function writeMonthSummary_(sheet, key, p, pb) {
   sheet.getRange(1, SUMMARY_COL, out.length, WIDTH).setValues(out);
 
   const cell = (row, col, rows, cols) => sheet.getRange(row, SUMMARY_COL + col, rows || 1, cols || 1);
-  [3, 5, 12].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
-  cell(17, 1, 2, 2).setNumberFormat(MONEY);
-  cell(24, 1, 3, 3).setNumberFormat(MONEY);
-  [1, 10, 15, 22, 28].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
-  [2, 4, 11, 16].forEach((row) => cell(row, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6'));
-  cell(23, 0, 1, 4).setFontWeight('bold').setBackground('#f3f4f6');
-  cell(24, 3, 3, 1).setFontWeight('bold');
-  cell(17, 0, 2, 1).setFontWeight('bold');
-  [6, 7, 8, 13, 19, 20].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
-  cell(30, 0).setBackground(COLORS.personalV);
-  cell(31, 0).setBackground(COLORS.personalK);
-  cell(32, 0).setBackground(COLORS.fixedV);
-  cell(33, 0).setBackground(COLORS.fixedK);
+  [3, 5, 14].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
+  cell(19, 1, 2, 2).setNumberFormat(MONEY);
+  cell(26, 1, 3, 3).setNumberFormat(MONEY);
+  [1, 12, 17, 24, 30].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
+  [2, 4, 13, 18].forEach((row) => cell(row, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6'));
+  cell(25, 0, 1, 4).setFontWeight('bold').setBackground('#f3f4f6');
+  cell(26, 3, 3, 1).setFontWeight('bold');
+  cell(19, 0, 2, 1).setFontWeight('bold');
+  [6, 7, 8, 9, 10, 15, 21, 22].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
+  // Status: green once cleared, amber while something is still owed.
+  if (s.status === 'Cleared') cell(10, 0, 1, 2).setBackground(COLORS.settled);
+  else if (s.status !== 'Even') cell(10, 0, 1, 2).setBackground(COLORS.open);
+  cell(32, 0).setBackground(COLORS.personalV);
+  cell(33, 0).setBackground(COLORS.personalK);
+  cell(34, 0).setBackground(COLORS.fixedV);
+  cell(35, 0).setBackground(COLORS.fixedK);
+  cell(36, 0).setBackground(COLORS.settled);
 }
 
-// The "Sirikh" tab: one row per month, newest first. The last column is what was left of the
-// month's joint budget.
+// The "Sirikh" tab: one row per month, newest first. Settled and Status show whether the month's
+// owing has been paid back; the last column is what was left of the month's joint budget.
 function writeOverview_(months) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(OVERVIEW_TAB) || ss.insertSheet(OVERVIEW_TAB, 0);
   const HEAD = ['Month', 'Tab', 'Joint budget', 'Joint spent', 'Fixed bills', 'V personal spent', 'K personal spent',
-    'V personal left', 'K personal left', 'Joint settle', 'Fixed settle', 'Personal settle', 'Overall settle', 'Joint left'];
+    'V personal left', 'K personal left', 'Joint settle', 'Fixed settle', 'Personal settle', 'Overall settle',
+    'Settled', 'Status', 'Joint left'];
   const W = HEAD.length;
   const line = (...cells) => cells.concat(new Array(W - cells.length).fill(''));
   const out = [
     line('Sirikh: month by month'),
-    line('Each month has its own tab. Budgets reset on the 1st. This tab is rebuilt on every save; do not type here.'),
+    line('Each month has its own tab. Budgets reset on the 1st. Status turns green (Cleared) once the month is settled. This tab is rebuilt on every save; do not type here.'),
     line(),
     HEAD,
   ];
+  const statuses = [];
   months.slice().reverse().forEach((m) => {
     const p = m.p;
     const s = shares_(p);
     const budget = round2_(p.start + p.added);
     const left = (b) => (b ? b.remaining : 'not set');
+    statuses.push(s.status);
     out.push([monthLabel_(m.key), tabName_(m.key), p.hasBudget ? budget : 'not set', p.spent, p.fixed, p.pv, p.pk,
-      left(m.pb.V), left(m.pb.K), s.settle, s.fixedSettle, s.personalSettle, s.overall,
+      left(m.pb.V), left(m.pb.K), s.settle, s.fixedSettle, s.personalSettle, s.overall, s.settledText, s.status,
       p.hasBudget ? round2_(budget - p.spent) : 'not set']);
   });
   const area = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), out.length, 4), W);
@@ -556,6 +639,10 @@ function writeOverview_(months) {
   if (months.length) {
     sheet.getRange(5, 3, months.length, 7).setNumberFormat(MONEY);
     sheet.getRange(5, W, months.length, 1).setNumberFormat(MONEY).setFontWeight('bold');
+    statuses.forEach((st, i) => {
+      if (st === 'Cleared') sheet.getRange(5 + i, W - 1).setBackground(COLORS.settled).setFontWeight('bold');
+      else if (st !== 'Even') sheet.getRange(5 + i, W - 1).setBackground(COLORS.open);
+    });
   }
 }
 
@@ -589,6 +676,9 @@ function state_(current, touched) {
     hasBalance: cur.p.hasBudget,
     period: cur.p,
     personalBudgets: cur.pb,
+    // Months with money still owed, newest first (the settle form offers these).
+    unsettled: months.slice().reverse().map((m) => ({ month: m.key, label: monthLabel_(m.key), remaining: shares_(m.p).remaining }))
+      .filter((u) => Math.abs(u.remaining) >= 0.01).slice(0, 12),
     // Start-of-month prompt: the joint budget, and personal budgets that existed last month.
     needsBudget: {
       joint: !cur.p.hasBudget,
@@ -643,6 +733,8 @@ function formatDate_(v, tz) {
 // V and K take turns (V three tanks, K the fourth), so their own turns create nothing owed.
 //   Joint (a trip fill-up, a shared repair): split 50/50, the other person owes half to the card owner.
 //   A turn paid on the other person's card: owed back in full.
+//   Settlement rows (Category "Settlement", green): money paid back; Card Used = who paid. They are
+//   not car costs: left out of spending, categories and fuel math, they only reduce what is owed.
 //
 // Fuel math (Fuel rows in odometer order). Fill is Full (default; stopping at the pump click counts)
 // or Partial. Missed Before = Yes when a fill-up before this one was never logged.
@@ -743,12 +835,17 @@ function importOldFuelLog_(sheet) {
 function validateCar_(b) {
   const date = String(b.date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Invalid date.');
-  const category = CAR_CATEGORIES.indexOf(b.category) !== -1 ? b.category : '';
+  const isSettlement = b.category === 'Settlement';
+  const category = CAR_CATEGORIES.indexOf(b.category) !== -1 || isSettlement ? b.category : '';
   if (!category) throw new Error('Pick a car category.');
   const paidBy = String(b.paidBy || '');
   if (paidBy !== 'V' && paidBy !== 'K') throw new Error('Card used must be V or K.');
-  const expenseFor = b.expenseFor === undefined || b.expenseFor === '' ? paidBy : String(b.expenseFor);
+  // A settlement goes from the payer to the other person.
+  const expenseFor = isSettlement ? (paidBy === 'V' ? 'K' : 'V')
+    : b.expenseFor === undefined || b.expenseFor === '' ? paidBy : String(b.expenseFor);
   if (['V', 'K', 'Joint'].indexOf(expenseFor) === -1) throw new Error('Expense for must be V, K or Joint.');
+  if (isSettlement && !(Number(b.amount) > 0)) throw new Error('A settlement must be more than 0.');
+  const method = SETTLE_METHODS.indexOf(b.method) !== -1 ? b.method : 'Splitwise';
   const opt = (v, name) => {
     if (v === '' || v === null || v === undefined) return '';
     const n = Number(v);
@@ -768,7 +865,7 @@ function validateCar_(b) {
     id: String(b.id || Utilities.getUuid()).slice(0, 64),
     date: date,
     category: category,
-    vendor: safeText_(String(b.vendor || '').trim().slice(0, 200)),
+    vendor: isSettlement ? 'Settled via ' + method : safeText_(String(b.vendor || '').trim().slice(0, 200)),
     amount: round2_(amount),
     paidBy: paidBy,
     odometer: fuel ? opt(b.odometer, 'odometer') : '',
@@ -814,6 +911,7 @@ function deleteCar_(sheet, id) {
 
 const blankIfNot_ = (v) => (v === '' || v === null || v === undefined ? '' : v);
 const isPartial_ = (r) => String(r[K.FILL]).trim().toLowerCase() === 'partial';
+const isCarSettlement_ = (r) => String(r[K.CATEGORY]) === 'Settlement';
 const isMarkedMissed_ = (r) => /^(y|yes|true|x|1)$/i.test(String(r[K.MISSED]).trim());
 
 // Gallons as entered, or worked out from amount / price per gallon. null when unknown.
@@ -908,6 +1006,9 @@ function recomputeCar_(sheet) {
     return out;
   });
   if (changed) sheet.getRange(2, K.MILES + 1, rows.length, 7).setValues(block);
+  rows.forEach((r, i) => {
+    if (isCarSettlement_(r)) sheet.getRange(i + 2, 1, 1, CAR_HEADERS.length).setBackground(COLORS.settled);
+  });
   sheet.getRange(2, K.AMOUNT + 1, rows.length, 1).setNumberFormat(MONEY);
   sheet.getRange(2, K.PPG + 1, rows.length, 1).setNumberFormat('$0.000');
   sheet.getRange(2, K.MPG + 1, rows.length, 1).setNumberFormat('0.00');
@@ -935,7 +1036,7 @@ function carStats_(rows, math) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const data = rows.filter((r) => !isEmptyCarRow_(r));
   const s = {
-    v: 0, k: 0, total: 0, owed: 0, turns: { V: 0, K: 0, Joint: 0 },
+    v: 0, k: 0, total: 0, owed: 0, settled: 0, settledNet: 0, turns: { V: 0, K: 0, Joint: 0 },
     fills: 0, partials: 0, missed: 0, gallons: 0, fuelSpend: 0, avgPpg: 0,
     mpg: 0, rollingMpg: 0, bestMpg: 0, worstMpg: 0, avgMilesPerTank: 0, avgEffRange: 0,
     fuelCpm: 0, totalCpm: 0, milesTracked: 0, lastOdometer: 0, tankGallons: TANK_GALLONS,
@@ -946,6 +1047,11 @@ function carStats_(rows, math) {
   let ppgSpend = 0, ppgGallons = 0;
   data.forEach((r) => {
     const amount = toNumber_(r[K.AMOUNT]);
+    if (isCarSettlement_(r)) {
+      s.settled += amount;
+      s.settledNet += r[K.PAID_BY] === 'K' ? amount : -amount;
+      return; // money paid back, not a car cost
+    }
     s.total += amount;
     if (r[K.PAID_BY] === 'V') s.v += amount;
     if (r[K.PAID_BY] === 'K') s.k += amount;
@@ -1026,11 +1132,17 @@ function carStats_(rows, math) {
     return { month: k, fuel: round2_(m.fuel), other: round2_(m.other), total: round2_(m.total), miles: round2_(m.miles),
       mpg: m.gallons ? round2_(m.miles / m.gallons) : '' };
   });
-  ['v', 'k', 'total', 'owed', 'gallons', 'fuelSpend', 'mpg', 'bestMpg', 'worstMpg', 'avgMilesPerTank', 'avgEffRange', 'milesTracked']
+  ['v', 'k', 'total', 'owed', 'settled', 'settledNet', 'gallons', 'fuelSpend', 'mpg', 'bestMpg', 'worstMpg', 'avgMilesPerTank', 'avgEffRange', 'milesTracked']
     .forEach((key) => { s[key] = round2_(s[key]); });
   ['avgPpg', 'fuelCpm', 'totalCpm'].forEach((key) => { s[key] = Math.round(s[key] * 1000) / 1000; });
   Object.keys(s.byCategory).forEach((key) => { s.byCategory[key] = round2_(s.byCategory[key]); });
-  s.settle = settleText_(s.owed, -s.owed);
+  // What is still owed after settlements (positive = K owes V).
+  s.remaining = round2_(s.owed - s.settledNet);
+  s.settle = settleText_(s.remaining, -s.remaining);
+  s.settledText = !s.settled ? 'None yet'
+    : s.settledNet > 0 ? 'K paid V $' + s.settledNet.toFixed(2)
+    : s.settledNet < 0 ? 'V paid K $' + (-s.settledNet).toFixed(2) : '$' + s.settled.toFixed(2) + ' both ways';
+  s.status = Math.abs(s.remaining) < 0.01 ? (s.settled ? 'Cleared' : 'Even') : 'Open: ' + s.settle;
   s.recent = data.slice(-RECENT_COUNT).reverse().map((r) => ({
     id: String(r[K.ID]), date: formatDate_(r[K.DATE], tz), category: String(r[K.CATEGORY]), vendor: String(r[K.VENDOR]),
     amount: toNumber_(r[K.AMOUNT]), paidBy: String(r[K.PAID_BY]), notes: String(r[K.NOTES]),
@@ -1050,7 +1162,7 @@ function writeCarSummary_(sheet, s) {
     line('Spent so far'),                                               // 1
     line('V paid', 'K paid', 'Total spent'),                            // 2
     line(s.v, s.k, s.total),                                            // 3
-    line('Owed from joint or other-card costs', s.settle),              // 4
+    line('Owed (after settlements)', s.status, 'Settled', s.settledText), // 4
     line('Fuel stats'),                                                 // 5
     line('Overall MPG (full-to-full)', s.mpg),                          // 6
     line('Rolling MPG (last ' + ROLLING_FILLS + ' fills)', s.rollingMpg), // 7
@@ -1100,6 +1212,8 @@ function writeCarSummary_(sheet, s) {
   cell(40, 0, 1, WIDTH).setFontWeight('bold').setBackground('#f3f4f6');
   cell(3, 0, 1, 3).setNumberFormat(MONEY);
   [4, 6].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
+  if (s.status === 'Cleared') cell(4, 0, 1, 2).setBackground(COLORS.settled);
+  else if (s.status !== 'Even') cell(4, 0, 1, 2).setBackground(COLORS.open);
   [9, 10, 11].forEach((row) => cell(row, 1).setNumberFormat('$0.000'));
   cell(16, 1).setNumberFormat(MONEY);
   cell(21, 1, CAR_CATEGORIES.length + 1, 1).setNumberFormat(MONEY);
@@ -1139,7 +1253,8 @@ function ensureCarCharts_(sheet) {
 
 function carState_(sheet) {
   const res = recomputeCar_(sheet);
-  const stats = carStats_(res.rows, res.math);
+  labelSettlements_(sheet, res.rows, carStats_(res.rows, res.math).owed, { amount: K.AMOUNT, payer: K.PAID_BY, label: K.VENDOR }, isCarSettlement_);
+  const stats = carStats_(res.rows, res.math); // after labelling, so Recent shows the new labels
   writeCarSummary_(sheet, stats);
   return stats;
 }

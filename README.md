@@ -42,6 +42,22 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 - **Offline:** entries saved without signal are kept on the phone and synced later. An hourglass marks unsynced entries.
 - **Security:** a shared key protects writes. The repo contains no sheet ID, key, or data.
 
+## Settling up (Splitwise, cash)
+
+When you pay each other back, tap **Record settlement** on a Who owes whom card (Joint or Personal) or on the Sonata spending card:
+
+- **Settles:** the month it clears (defaults to the oldest month still owed); Sonata has no month.
+- **Who paid / Amount:** filled in from what is still owed; change them for a part payment.
+- **Method:** Splitwise, Cash, Zelle, Venmo or Other. **Date paid:** when the money moved.
+
+A settlement is **not an expense**: it never touches budgets, spending or categories.
+
+- **Sheet:** a green **Settlement** row in that month's tab (Card Used = who paid, Expense For = who received; Sonata: Category "Settlement").
+- **Status:** each month tab shows **Settled** and **Status** under Who owes whom. Status is amber "Open: K owes V $x" while something is owed and turns green **Cleared** once it is paid back. The overview has the same **Settled** and **Status** columns (Joint left stays last), and the Sonata summary row 4 shows the car's status.
+- **App:** each Who owes whom card shows "Still owed: ..." in amber or "Cleared" in green, and lists earlier months that are still open.
+- **Pay in parts or in one go:** each payment is its own row. Labels are automatic: "Settlement 1 (partial) via Splitwise", "Settlement 2 (final, cleared) via Cash", or "Settlement (paid in full) via Zelle" for a single payment; deleting a payment renumbers the rest. The form shows what is left after the payment you type.
+- **Overpay guard:** a payment above what is owed asks for confirmation, so a typo cannot flip the debt to the other person.
+
 ## Files
 
 Keep all files at the top level of the repo.
@@ -74,14 +90,14 @@ Each calendar month has its own tab, named like **Sirikh Oct 2026**, created aut
 - **Budgets are per calendar month and reset on the 1st.** Nothing carries over.
 - **Set it any time:** the latest Set balance row in a month is that month's joint budget, and every Joint expense dated in the month counts against it, even ones logged before it (the Costco row above). The same goes for Personal budget rows and each person's Personal expenses.
 - **Joint Left ($)** = the month's joint budget minus joint spending up to that row. Blank until a budget is set for the month.
-- **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance`, `Personal budget` (or `Add funds` typed by hand). Blank counts as Joint.
+- **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance`, `Personal budget`, `Settlement` (or `Add funds` typed by hand). Blank counts as Joint.
 - **Expense For** is filled for Personal rows (V or K). Rows without it count as the card owner's.
 - **Row colors** come from Type, Expense For and Card Used, and update after hand edits.
 - **ID** prevents duplicates and identifies rows to delete. Do not edit it.
 
 **Tables in each month tab (column J onward)**, rebuilt on every save:
 
-1. **Who owes whom** for the month: V paid, K paid, Total; V's share, K's share, Equal split; Settle up (joint); Personal on other's card; Overall (joint + fixed + personal).
+1. **Who owes whom** for the month: V paid, K paid, Total; V's share, K's share, Equal split; Settle up (joint); Personal on other's card; Overall (joint + fixed + personal); **Settled**; **Status** (green Cleared or amber Open).
 2. **Fixed bills:** V paid, K paid, Total, Settle up.
 3. **Personal expenses:** each person's Personal spending on their own card (nothing owed) and on the other's card (owed in full), Settle up, Overall.
 4. **Budgets for the month:** Budget, Spent and **Left** for Joint, V personal and K personal.
@@ -93,7 +109,7 @@ Do not type in columns J onward; the script overwrites them.
 
 The **Sirikh** tab is a month-by-month overview, newest month first, rebuilt on every save:
 
-Month | Tab | Joint budget | Joint spent | Fixed bills | V personal spent | K personal spent | V personal left | K personal left | Joint settle | Fixed settle | Personal settle | Overall settle | **Joint left**
+Month | Tab | Joint budget | Joint spent | Fixed bills | V personal spent | K personal spent | V personal left | K personal left | Joint settle | Fixed settle | Personal settle | Overall settle | Settled | Status | **Joint left**
 
 The last column is what was left of that month's joint budget. Do not type in this tab.
 
@@ -207,7 +223,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 17" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 18" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

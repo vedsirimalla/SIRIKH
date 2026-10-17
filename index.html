@@ -88,6 +88,9 @@
       </table>
       <div id="settleLine" class="settle"></div>
       <div id="overallLine" class="overall" hidden></div>
+      <div id="statusLine" class="status"></div>
+      <div id="olderOpen" class="muted older-open" hidden></div>
+      <div class="row"><button type="button" id="settleBtn" class="full">Record settlement</button></div>
       <div class="muted">Share = what each paid minus half the joint total. A personal expense on the other person's card is owed in full.</div>
     </section>
 
@@ -105,6 +108,8 @@
       </table>
       <div id="pSettle" class="settle"></div>
       <div id="pOverall" class="overall"></div>
+      <div id="pStatus" class="status"></div>
+      <div class="row"><button type="button" id="pSettleBtn" class="full">Record settlement</button></div>
       <div class="muted">Own card: nothing owed. Other's card: owed in full. Overall adds joint expenses and fixed bills.</div>
     </section>
 
@@ -160,6 +165,7 @@
         </table>
         <div id="carSettle" class="settle"></div>
         <div id="carTurns" class="muted"></div>
+        <div class="row"><button type="button" id="carSettleBtn" class="full">Record settlement</button></div>
         <div class="muted">Own turns owe nothing. Joint costs split 50/50; a turn paid on the other person's card is owed in full.</div>
       </section>
 
@@ -331,6 +337,52 @@
       </div>
       <label>Start date
         <input type="date" id="pbDate" required>
+      </label>
+      <div class="row end">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settleDialog">
+    <form method="dialog" id="settleForm" novalidate>
+      <h2>Record a settlement</h2>
+      <p class="muted">Money paid back to clear what is owed (Splitwise, cash...). It is not an expense and does not touch any budget.</p>
+      <p id="settleOwed" class="settle-owed"></p>
+      <label id="settleMonthField">Settles
+        <select id="settleMonth"></select>
+      </label>
+      <div class="grid2">
+        <label>Who paid
+          <select id="settleWho">
+            <option value="K">K paid V</option>
+            <option value="V">V paid K</option>
+          </select>
+        </label>
+        <label>Amount ($)
+          <div class="amount">
+            <span>$</span>
+            <input type="text" id="settleAmount" inputmode="decimal" placeholder="0.00">
+          </div>
+        </label>
+      </div>
+      <div class="grid2">
+        <label>Method
+          <select id="settleMethod">
+            <option>Splitwise</option>
+            <option>Cash</option>
+            <option>Zelle</option>
+            <option>Venmo</option>
+            <option>Other</option>
+          </select>
+        </label>
+        <label>Date paid
+          <input type="date" id="settleDate">
+        </label>
+      </div>
+      <label>Notes
+        <input type="text" id="settleNotes" placeholder="Optional">
       </label>
       <div class="row end">
         <button value="cancel" formnovalidate>Cancel</button>
