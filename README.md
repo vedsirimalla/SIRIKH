@@ -15,7 +15,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - The text under Type explains the selected type.
 - **Budgets by type:** the budget card follows the selected Type.
   - **Joint:** the joint monthly budget (below).
-  - **Personal:** a personal budget for V and one for K. **Set personal budget** sets either or both. Each Personal expense comes out of the budget of the person it is for, whoever's card paid (K's ramen on V's card reduces K's budget, and K still owes V).
+  - **Personal:** a personal budget for V and one for K, for a calendar month. **Set personal budget** sets either or both for the month of its start date. Every Personal expense for that person dated in that month comes out of it, whoever's card paid and even if it was logged before the budget was set (K's ramen on V's card reduces K's budget, and K still owes V).
   - **Fixed and Sonata:** no budget. Fixed bills get paid regardless; Sonata shows car stats instead.
 - **Joint monthly budget:**
   - **Set monthly budget** starts a new budget, for example $705 on the 1st.
@@ -74,7 +74,7 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 | 2026-10-01 | Rent | $1,800.00 | V | | Fixed | $659.80 | |
 
 - **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance`, `Personal budget` (or `Add funds` typed by hand). Blank counts as Joint.
-- **Personal budget** rows start a new personal budget for the person in Expense For.
+- **Personal budget** rows set the personal budget for the person in Expense For, for the month of the row's date (the latest one in a month wins).
 - **Expense For** is filled for Personal rows (V or K). Personal rows saved before this column existed count as the card owner's.
 - **Row colors** are set by the script from Type, Expense For and Card Used, and update after hand edits.
 - **Balance ($)** is recalculated top to bottom by the script, including after hand edits to Amount or Type.
@@ -210,7 +210,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 15" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal or Sonata entries stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 16" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |

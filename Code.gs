@@ -21,8 +21,10 @@
  *   Fixed        rent, utilities and other bills, tracked separately (orange: V light, K darker)
  *   Personal     logged only                                                     (blue: V light, K darker)
  *   Set balance      starts a new joint monthly budget (only Joint expenses come out of it)
- *   Personal budget  starts a new personal budget for V or K (Expense For); that person's Personal
- *                    expenses come out of it, whoever's card paid. Fixed and Sonata have no budget.
+ *   Personal budget  sets the personal budget for V or K (Expense For) for the calendar month of its
+ *                    date. Every Personal expense for that person dated in that month comes out of
+ *                    it, whoever's card paid, even one logged before the budget was set.
+ *                    Fixed and Sonata have no budget.
  *   Add funds    adds to the budget (only from hand edits; the app no longer offers it)
  * Balance ($) and the row colors are recalculated by this script from top to bottom, so edits
  * made by hand in the tab are picked up automatically. Negative amounts are refunds.
@@ -38,7 +40,7 @@
 
 const TAB_NAME = 'Sirikh';
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 15;
+const BACKEND_VERSION = 16;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Balance ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget'];
@@ -289,19 +291,26 @@ function state_(sheet) {
   };
 }
 
-// Each person's current personal budget: starts at their latest "Personal budget" row; every
-// Personal expense for that person after it (whoever's card paid) comes out of it.
+// Each person's personal budget for a calendar month: the latest "Personal budget" row for that
+// person sets the amount and the month (its date). Every Personal expense for that person dated in
+// that month counts, whoever's card paid and whether it was logged before or after the budget.
 function personalBudgets_(rows) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const data = rows.filter((r) => !isEmptyRow_(r));
   const out = { V: null, K: null };
-  rows.filter((r) => !isEmptyRow_(r)).forEach((r) => {
+  data.forEach((r) => {
     const who = owner_(r);
-    if (who !== 'V' && who !== 'K') return;
-    if (r[C.TYPE] === 'Personal budget') {
-      out[who] = { since: formatDate_(r[C.DATE], tz), budget: toNumber_(r[C.AMOUNT]), spent: 0 };
-    } else if (r[C.TYPE] === 'Personal' && out[who]) {
-      out[who].spent += toNumber_(r[C.AMOUNT]);
+    if (r[C.TYPE] !== 'Personal budget' || (who !== 'V' && who !== 'K')) return;
+    const date = formatDate_(r[C.DATE], tz);
+    // Latest by date; a later row on the same date replaces the earlier one.
+    if (!out[who] || date >= out[who].setOn) {
+      out[who] = { month: date.slice(0, 7), since: date.slice(0, 7) + '-01', setOn: date, budget: toNumber_(r[C.AMOUNT]), spent: 0 };
     }
+  });
+  data.forEach((r) => {
+    if (r[C.TYPE] !== 'Personal') return;
+    const b = out[owner_(r)];
+    if (b && formatDate_(r[C.DATE], tz).slice(0, 7) === b.month) b.spent += toNumber_(r[C.AMOUNT]);
   });
   ['V', 'K'].forEach((who) => {
     const b = out[who];

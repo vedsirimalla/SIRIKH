@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 16; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 17; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set' };
@@ -363,19 +363,24 @@
     const pb = { V: null, K: null };
     for (const who of ['V', 'K']) {
       const b = st && st.personalBudgets && st.personalBudgets[who];
-      if (b) pb[who] = { since: b.since, budget: b.budget, spent: b.spent };
+      if (b) pb[who] = { month: b.month || String(b.since).slice(0, 7), since: b.since, budget: b.budget, spent: b.spent };
     }
+    // A personal budget covers a calendar month: every Personal expense for that person dated in
+    // that month counts, whoever's card paid, even one logged before the budget was set.
+    const inMonth = (b, date) => b && String(date).slice(0, 7) === b.month;
     for (const op of getQueue()) {
       if (op.table === 'car') continue;
       if (op.op === 'add' && op.entry.type === 'Personal budget') {
-        pb[op.entry.expenseFor] = { since: op.entry.date, budget: op.entry.amount, spent: 0 };
+        const month = op.entry.date.slice(0, 7);
+        const prev = pb[op.entry.expenseFor];
+        pb[op.entry.expenseFor] = { month, since: month + '-01', budget: op.entry.amount, spent: prev && prev.month === month ? prev.spent : 0 };
       } else if (op.op === 'add' && op.entry.type === 'Personal') {
         const b = pb[op.entry.expenseFor || op.entry.paidBy];
-        if (b) b.spent += op.entry.amount;
+        if (inMonth(b, op.entry.date)) b.spent += op.entry.amount;
       } else if (op.op === 'delete') {
         const e = recent.find((r) => r.id === op.id && r.type === 'Personal');
         const b = e && pb[e.expenseFor || e.paidBy];
-        if (b) b.spent -= e.amount;
+        if (inMonth(b, e && e.date)) b.spent -= e.amount;
       }
     }
     for (const who of ['V', 'K']) {
@@ -408,10 +413,10 @@
       fill.style.width = used + '%';
       fill.className = 'meter-fill' + (b.remaining < 0 ? ' over' : used >= 80 ? ' warn' : '');
       row.querySelector('.meter').setAttribute('aria-valuenow', String(Math.round(used)));
-      let text = `Spent ${money(b.spent)} of ${money(b.budget)} since ${prettyDate(b.since)}`;
-      if (b.since.slice(0, 7) === today().slice(0, 7) && b.remaining > 0) {
+      let text = `Spent ${money(b.spent)} of ${money(b.budget)} in ${monthName(b.since)}, any card`;
+      if (b.month === today().slice(0, 7) && b.remaining > 0) {
         text += ` · about ${money(b.remaining / daysLeftInMonth())} a day`;
-      } else if (b.since.slice(0, 7) !== today().slice(0, 7)) {
+      } else if (b.month !== today().slice(0, 7)) {
         text += ` · set a new one for ${monthName(today())}`;
       }
       sub.textContent = text;
