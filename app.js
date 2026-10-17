@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 20; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 21; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
@@ -11,7 +11,7 @@
     Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
     Personal: "Personal: one person's own expense, not in the budget. If it goes on the other person's card, they are owed the full amount.",
     Car: "Sonata: car costs and fuel, saved to the Sonata tab. Expense for: whose turn it is (V or K), or Joint to split 50/50.",
-    Funds: 'Funds: money in and out of your pockets, saved to the Funds tab. Income minus spending, investments and the loan is what is left this month.',
+    Funds: 'Funds: what comes in and what goes out (income, investments, loan payments, savings), saved to the Funds tab with its overview.',
   };
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
@@ -27,7 +27,7 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
-    if (op.table === 'funds') return 19;
+    if (op.table === 'funds') return 20;
     if (op.table === 'car') return op.op !== 'add' ? 9 : op.entry.category === 'Settlement' ? 18 : 15;
     if (op.op !== 'add') return 0;
     if (op.entry.type === 'Settlement') return 18;
@@ -210,7 +210,7 @@
     const dismissed = store.get('promptDismissed', '') === currentMonth();
     const personal = ['V', 'K'].filter((w) => need[w]);
     const show = !dismissed && !!getSettings() && (need.joint || personal.length > 0);
-    card.hidden = !show || isCarMode() || isMoneyMode();
+    card.hidden = !show || view === 'Car' || view === 'Funds';
     if (!show) return;
     const name = monthName(currentMonth());
     const parts = [];
@@ -343,6 +343,43 @@
 
   const isCarMode = () => selectedType() === 'Car';
 
+  // ---------- Navigation: Home (summaries) or one type's page. The form adds to the page's type;
+  // on Home a small Add picker chooses the type.
+  const VIEWS = ['Home', 'Joint', 'Fixed', 'Personal', 'Car', 'Funds'];
+  const VIEW_LABELS = { Home: 'Home', Joint: 'Joint', Fixed: 'Fixed', Personal: 'Personal', Car: 'Sonata', Funds: 'Funds' };
+  let view = VIEWS.includes(store.get('view', 'Home')) ? store.get('view', 'Home') : 'Home';
+  function restoreType(type) {
+    const el = document.querySelector(`input[name="type"][value="${type}"]`);
+    if (el) el.checked = true;
+  }
+  function setView(v) {
+    view = VIEWS.includes(v) ? v : 'Home';
+    store.set('view', view);
+    restoreType(view === 'Home' ? store.get('quickType', 'Joint') : view);
+    $('navLabel').textContent = VIEW_LABELS[view];
+    document.querySelectorAll('#navMenu button').forEach((b) => b.setAttribute('aria-current', b.dataset.view === view ? 'page' : 'false'));
+    closeNav();
+    updateTypeHint();
+    window.scrollTo(0, 0);
+  }
+  function closeNav() {
+    $('navMenu').hidden = true;
+    $('navBtn').setAttribute('aria-expanded', 'false');
+  }
+  $('navBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = $('navMenu').hidden;
+    $('navMenu').hidden = !open;
+    $('navBtn').setAttribute('aria-expanded', String(open));
+  });
+  $('navMenu').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-view]');
+    if (b) setView(b.dataset.view);
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.nav')) closeNav(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNav(); });
+  $('typeSeg').addEventListener('change', () => { if (view === 'Home') store.set('quickType', selectedType()); });
+
   function renderRecent() {
     if (isMoneyMode()) return renderMoneyRecent();
     const state = getState();
@@ -422,12 +459,15 @@
   // Each type shows its own budget: Joint the joint monthly budget, Personal the two personal
   // budgets, Fixed and Sonata none (bills get paid regardless; the car has its own stats).
   function render() {
-    const type = selectedType();
+    const type = view;
     const isCar = type === 'Car';
     const isMoney = type === 'Funds';
-    $('mainDash').hidden = isCar || isMoney;
+    const isHome = type === 'Home';
+    $('mainDash').hidden = isCar || isMoney || isHome;
     $('carDash').hidden = !isCar;
     $('moneyDash').hidden = !isMoney;
+    $('homeDash').hidden = !isHome;
+    $('typeField').hidden = !isHome;
     renderBalance();
     renderPersonalBudgets();
     renderMonthPrompt();
@@ -440,6 +480,7 @@
     if (type === 'Personal') $('fixedCard').hidden = true;
     if (isCar) renderCar();
     if (isMoney) renderMoney();
+    if (isHome) renderHome();
     renderRecent();
   }
 
@@ -1288,6 +1329,7 @@
     amountTyped = false;
     $('date').value = today();
     $('paidBy').value = entry.paidBy;
+    restoreType(type);
     updateTypeHint();
 
     $('saveBtn').disabled = true;
@@ -1363,29 +1405,41 @@
     report(status, `Budget set ✓ ${money(amount)} for ${monthName(date)}`);
   });
 
-  // ---------- Funds: income, investments, the loan, rolling savings and the goal
+  // ---------- Funds: what comes in and what goes out (income, investments, loan payments, savings)
   const isMoneyMode = () => selectedType() === 'Funds';
   const MONEY_KINDS = {
-    'Income': { label: 'Source', chips: ['Salary', 'Tax refund', 'Bonus', 'Other'], both: true, otherHint: 'Where it came from' },
-    'Investment': { label: 'Where', chips: ['401(K)', 'India', 'USA', 'Other'], both: false, otherHint: 'Brokerage, HSA...' },
-    'Loan payment': { label: '', chips: null, both: false },
-    'Use savings': { label: 'What for', chips: null, both: true, otherHint: 'Flight to India, laptop...' },
+    'Income': { label: 'Source', chips: () => ['Salary', 'Tax refund', 'Bonus', 'Other'], persons: ['V', 'K', 'Both'], otherHint: 'Where it came from' },
+    'Investment': { label: 'Where', chips: () => ['401(K)', 'India', 'USA', 'Other'], persons: ['V', 'K'], fromLabel: 'From',
+      from: [['Income', "This month's income"], ['Savings', 'Savings']], otherHint: 'Brokerage, HSA...' },
+    'Loan payment': { label: 'Loan', chips: () => loanNames().concat(['Other']), persons: ['V', 'K', 'Both'], otherHint: 'Which loan (V education...)' },
+    'Use savings': { label: 'What for', chips: null, persons: ['V', 'K', 'Both'], otherHint: 'Flight to India, laptop...' },
   };
   const MONEY_HINTS = {
     'Income': 'Income: in hand after 401(K), insurance and taxes (salary, tax refund, bonus). Both splits it half each.',
-    'Investment': 'Investment: money put away (401(K), India, USA). Counts toward the goal and comes out of this month.',
-    'Loan payment': "Loan payment: a payment on V's loan. Comes out of this month and counts the loan balance down.",
-    'Use savings': 'Savings: spend from rolling savings (earlier months). Leaves this month alone.',
+    'Investment': 'Invest: money put away (401(K), India, USA). Counts toward the goal. From savings moves money kept in earlier months.',
+    'Loan payment': 'Loan: what you sent toward a loan. Counts as spending for the month. Both splits it half each.',
+    'Use savings': 'Savings: spend from savings kept in earlier months. Leaves this month alone.',
   };
-  const KIND_TAGS = { 'Income': 'Income', 'Investment': 'Invested', 'Loan payment': 'Loan', 'Loan balance': 'Loan balance', 'Use savings': 'Savings used', 'Prior investment': 'Invested before', 'Goal': 'Goal' };
-  const KIND_CLASS = { 'Income': 'c-income', 'Investment': 'c-invest', 'Prior investment': 'c-invest', 'Loan payment': 'c-loan', 'Loan balance': 'c-loan', 'Use savings': 'c-savings', 'Goal': 'c-goal' };
+  const KIND_TAGS = { 'Income': 'Income', 'Investment': 'Invested', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
+    'Use surplus': 'Savings used', 'Prior investment': 'Invested before', 'Goal': 'Goal', 'Savings target': 'Savings target' };
+  const KIND_CLASS = { 'Income': 'c-income', 'Investment': 'c-invest', 'Prior investment': 'c-invest', 'Loan payment': 'c-loan',
+    'Use savings': 'c-surplus', 'Use surplus': 'c-surplus', 'Goal': 'c-goal', 'Savings target': 'c-goal' };
+
+  const trio = () => ({ V: 0, K: 0, total: 0 });
+  const usd0 = (n) => (n < 0 ? '-$' : '$') + Math.round(Math.abs(n)).toLocaleString('en-US');
+  const ymLabel = (ym) => (ym ? monthName(ym + '-01') + ' ' + ym.slice(0, 4) : '');
+  const monthsBetween = (a, b) => (+b.slice(0, 4) - +a.slice(0, 4)) * 12 + (+b.slice(5, 7) - +a.slice(5, 7));
+  const pctText = (x) => (x === null || x === undefined ? '—' : `${Math.round(x)}%`);
+  const tone = (v) => (v <= -0.01 ? 'neg' : v >= 0.01 ? 'pos' : '');
+  // Loans you have paid toward before, most paid first (they become buttons).
+  const loanNames = () => (fundsEstimate().loans || []).map((l) => l.name).slice(0, 4);
 
   function selectedKind() {
     const checked = document.querySelector('input[name="moneyKind"]:checked');
     return checked ? checked.value : 'Income';
   }
 
-  // Chips, the "Other" box and the person list follow the kind.
+  // Fields follow the kind: chips, person and "From".
   function setupMoneyFields() {
     const kind = selectedKind();
     const cfg = MONEY_KINDS[kind];
@@ -1394,25 +1448,34 @@
     $('moneyCatLabel').textContent = cfg.label;
     const picker = $('moneyPicker');
     const keep = (document.querySelector('input[name="moneyCat"]:checked') || {}).value;
+    const chips = cfg.chips ? cfg.chips() : null;
     picker.innerHTML = '';
-    picker.hidden = !cfg.chips;
-    (cfg.chips || []).forEach((c, i) => {
-      const id = 'mc' + i;
+    picker.hidden = !chips;
+    (chips || []).forEach((c, i) => {
       const input = document.createElement('input');
-      Object.assign(input, { type: 'radio', name: 'moneyCat', id, value: c });
-      input.checked = c === keep || (!cfg.chips.includes(keep) && i === 0);
+      Object.assign(input, { type: 'radio', name: 'moneyCat', id: 'mc' + i, value: c });
+      input.checked = c === keep || (!chips.includes(keep) && i === 0);
       const label = document.createElement('label');
-      label.htmlFor = id;
-      label.textContent = c;
+      label.htmlFor = 'mc' + i;
+      label.textContent = c === 'Other' && kind === 'Loan payment' ? (chips.length > 1 ? 'Another loan' : 'Name the loan') : c;
       picker.append(input, label);
     });
     updateMoneyOther();
     const person = $('moneyPerson');
     const was = person.value || store.get('moneyPerson', 'V');
-    const options = [['V', 'V'], ['K', 'K']].concat(cfg.both ? [['Both', 'Both (half each)']] : []);
     person.innerHTML = '';
-    for (const [value, label] of options) person.add(new Option(label, value));
-    person.value = kind === 'Loan payment' ? 'V' : options.some(([v]) => v === was) ? was : 'V';
+    for (const v of cfg.persons) person.add(new Option(v === 'Both' ? 'Both (half each)' : v, v));
+    person.value = cfg.persons.includes(was) ? was : 'V';
+    const from = $('moneyFrom');
+    $('moneyFromField').hidden = !cfg.from;
+    if (cfg.from) {
+      $('moneyFromLabel').textContent = cfg.fromLabel;
+      const prev = from.value;
+      from.innerHTML = '';
+      for (const [v, label] of cfg.from) from.add(new Option(label, v));
+      from.value = cfg.from.some(([v]) => v === prev) ? prev : cfg.from[0][0];
+    }
+    $('moneyGrid').classList.toggle('grid2', !!cfg.from);
     $('amount').placeholder = kind === 'Income' ? '3,138.18' : '0.00';
     $('notes').placeholder = kind === 'Income' ? 'After 401(K) and insurance' : 'Optional';
   }
@@ -1420,8 +1483,7 @@
   function updateMoneyOther() {
     const cfg = MONEY_KINDS[selectedKind()];
     const chip = (document.querySelector('input[name="moneyCat"]:checked') || {}).value;
-    const show = !!cfg.label && (!cfg.chips || chip === 'Other');
-    $('moneyOther').hidden = !show;
+    $('moneyOther').hidden = !(cfg.label && (!cfg.chips || chip === 'Other'));
     $('moneyOther').placeholder = cfg.otherHint || '';
   }
   $('kindSeg').addEventListener('change', setupMoneyFields);
@@ -1434,51 +1496,51 @@
     const chip = (document.querySelector('input[name="moneyCat"]:checked') || {}).value;
     const typed = $('moneyOther').value.trim();
     if (!cfg.chips) return typed;
-    return chip === 'Other' ? typed || 'Other' : chip || '';
+    return chip === 'Other' ? typed : chip || '';
   }
 
   async function saveMoney(date) {
     const kind = selectedKind();
     const amount = parseAmount($('amount').value);
     if (amount === null || amount <= 0) return markInvalid($('amount'), 'Enter a valid amount.');
-    const entry = { id: uuid(), date, kind, category: moneyCategory(), amount, person: $('moneyPerson').value, notes: $('notes').value.trim() };
+    const category = moneyCategory();
+    if (kind === 'Loan payment' && !category) return markInvalid($('moneyOther'), 'Which loan is this for?');
+    const entry = { id: uuid(), date, kind, category, amount, person: $('moneyPerson').value, notes: $('notes').value.trim() };
+    if (kind === 'Investment') entry.from = $('moneyFrom').value;
     enqueue({ op: 'add', table: 'funds', entry });
 
-    const keepPerson = entry.person;
+    const keepFrom = $('moneyFrom').value;
     $('expenseForm').reset();
     clearInvalid($('expenseForm'));
     $('date').value = today();
     $('paidBy').value = store.get('paidBy', 'V');
-    $('typeMoney').checked = true; // stay on Funds, same kind
+    restoreType(view === 'Home' ? store.get('quickType', 'Funds') : 'Funds');
     document.querySelector(`input[name="moneyKind"][value="${kind}"]`).checked = true;
     updateTypeHint();
-    $('moneyPerson').value = keepPerson;
+    $('moneyPerson').value = entry.person;
+    if (kind === 'Investment') $('moneyFrom').value = keepFrom;
 
     $('saveBtn').disabled = true;
     const status = await sync();
     $('saveBtn').disabled = false;
     const f = fundsEstimate();
-    const label = entry.category || KIND_TAGS[kind];
     let extra = '';
-    if (kind === 'Use savings') extra = ` · ${money(f.rolling.total)} savings left`;
-    else if (kind === 'Investment' && f.goal) extra = ` · goal ${f.goal.percent}% done`;
-    else if (kind === 'Loan payment' && f.loan) extra = ` · ${money(f.loan.remaining)} left on the loan`;
-    if (kind !== 'Use savings' && f.now && String(date).slice(0, 7) === currentMonth()) extra += ` · ${money(f.now.left.total)} left this month`;
-    report(status, `Saved ✓ ${label} ${money(amount)}${extra}`);
+    if (kind === 'Use savings' || entry.from === 'Savings') extra = ` · ${money(f.available.total)} savings from earlier left`;
+    if (kind === 'Investment' && f.goal) extra += ` · goal ${f.goal.percent}% done`;
+    if (String(date).slice(0, 7) === currentMonth()) extra += f.safe ? ` · ${money(f.safe.left.total)} safe to spend` : ` · ${money(f.now.savings.total)} savings this month`;
+    report(status, `Saved ✓ ${category || KIND_TAGS[kind]} ${money(amount)}${extra}`);
+    if (kind === 'Income' && category === 'Salary' && (entry.person === 'V' || entry.person === 'K') && status !== 'outdated') openPayday(entry);
   }
 
   // ---- Live estimate: what the sheet last reported plus every change not synced yet
   // (Funds entries and new expenses), so the picture updates the moment something is saved.
-  const trio = () => ({ V: 0, K: 0, total: 0 });
   const blankNow = (month) => ({
-    month, label: monthName(month + '-01') + ' ' + month.slice(0, 4), income: trio(), joint: 0, fixed: 0, personal: { V: 0, K: 0 },
-    sonata: trio(), invest: trio(), loan: trio(), out: trio(), left: trio(), used: trio(), rollingBefore: trio(), rollingAfter: trio(),
+    month, label: ymLabel(month), income: trio(), shared: trio(), personal: trio(), sonata: trio(), loan: trio(), spent: trio(),
+    invest: trio(), savings: trio(), kept: trio(), rate: { V: null, K: null, total: null }, investSaved: trio(), used: trio(),
+    savedBefore: trio(), savedAfter: trio(), joint: 0, fixed: 0, sonataShared: 0, budgets: null,
   });
-  const shares = (who, amt) => (who === 'Both' || who === 'Joint' ? { V: amt / 2, K: amt / 2 } : who === 'K' ? { V: 0, K: amt } : { V: amt, K: 0 });
-  const bump = (o, who, amt) => { const s = shares(who, amt); o.V += s.V; o.K += s.K; if ('total' in o) o.total += amt; };
-  const monthsBetween = (a, b) => (+b.slice(0, 4) - +a.slice(0, 4)) * 12 + (+b.slice(5, 7) - +a.slice(5, 7));
-  const ymLabel = (ym) => (ym ? monthName(ym + '-01') + ' ' + ym.slice(0, 4) : '');
-  const usd0 = (n) => '$' + Math.round(n).toLocaleString('en-US');
+  const shares = (who, amt) => (who === 'Both' || who === 'Joint' ? { V: amt / 2, K: amt / 2 } : who === 'K' ? { V: 0, K: amt } : who === 'V' ? { V: amt, K: 0 } : { V: 0, K: 0 });
+  const bump = (o, who, amt) => { const x = shares(who, amt); o.V += x.V; o.K += x.K; if ('total' in o) o.total += x.V + x.K; };
 
   function fundsEstimate() {
     const st = getState() || {};
@@ -1488,81 +1550,111 @@
     if (base && base.month === month && base.now) {
       f = base;
     } else {
-      // Nothing synced for this month yet (or a new month began): last month's left joins rolling savings.
+      // Nothing synced for this month yet (or a new month began): last month's savings carry forward.
       const prev = base && base.now;
-      f = { month, now: blankNow(month), history: base ? base.history || [] : [], goal: base ? base.goal : null, loan: base ? base.loan : null,
-        rolling: prev ? { ...prev.rollingAfter } : base ? { ...base.rolling } : trio(), recent: base ? base.recent || [] : [] };
-      if (f.goal) f.goal.thisMonth = trio();
-      if (f.loan) f.loan.thisMonth = 0;
+      f = { month, now: blankNow(month), history: base ? base.history || [] : [], goal: base ? base.goal : null, loans: base ? base.loans || [] : [],
+        safe: base ? base.safe : null, savingsTarget: base ? base.savingsTarget : null, recent: base ? base.recent || [] : [],
+        available: prev ? { ...prev.savedAfter } : trio(), loanUsual: base ? base.loanUsual : trio(), recap: base ? base.recap : null,
+        suggestions: base ? base.suggestions || [] : [], hasEntries: base ? base.hasEntries : false };
+      f.now.savedBefore = { ...f.available };
     }
     const n = f.now;
     let changed = false;
-    // Spending in this month lowers what is left; spending in an earlier (tracked) month lowers rolling savings.
+    const firstMonth = f.history.length ? f.history[0].month : month;
+    // Spending this month lowers savings; spending in an earlier tracked month lowers savings carried over.
     const spend = (date, cat, who, amt) => {
       const m = String(date).slice(0, 7);
-      if (m > month || (f.history.length && m < f.history[0].month)) return;
+      if (m > month || m < firstMonth) return;
       changed = true;
-      if (m < month) { bump(f.rolling, who, -amt); return; }
-      if (cat === 'joint' || cat === 'fixed') n[cat] += amt;
-      else if (cat === 'personal') bump(n.personal, who, amt);
-      else bump(n[cat], who, amt);
-      bump(n.out, who, amt);
-      bump(n.left, who, -amt);
+      if (m < month) { bump(f.available, who, -amt); return; }
+      if (cat === 'joint' || cat === 'fixed') { n[cat] += amt; bump(n.shared, 'Both', amt); }
+      if (cat === 'sonata') { bump(n.sonata, who, amt); if (who === 'Joint') n.sonataShared += amt; }
+      if (cat === 'personal') bump(n.personal, who, amt);
+      if (cat === 'loan') bump(n.loan, who, amt);
+      bump(n.spent, who, amt);
+      bump(n.savings, who, -amt);
+      bump(n.kept, who, -amt);
     };
     const applyFund = (e, sign) => {
       const amt = sign * e.amount;
       const m = String(e.date).slice(0, 7);
       changed = true;
       if (e.kind === 'Income' && m <= month) {
-        if (m === month) { bump(n.income, e.person, amt); bump(n.left, e.person, amt); } else bump(f.rolling, e.person, amt);
+        if (m === month) { bump(n.income, e.person, amt); bump(n.savings, e.person, amt); bump(n.kept, e.person, amt); } else bump(f.available, e.person, amt);
       }
-      if (e.kind === 'Investment') spend(e.date, 'invest', e.person, amt);
-      if (e.kind === 'Loan payment') spend(e.date, 'loan', e.person, amt);
-      if (e.kind === 'Use savings' && m <= month) { bump(f.rolling, e.person, -amt); bump(n.used, e.person, amt); }
+      if (e.kind === 'Investment' && m <= month) {
+        if (e.from === 'Savings' || e.from === 'Surplus') { bump(f.available, e.person, -amt); if (m === month) bump(n.investSaved, e.person, amt); }
+        else if (m === month) { bump(n.invest, e.person, amt); bump(n.savings, e.person, -amt); }
+        else bump(f.available, e.person, -amt);
+      }
+      if ((e.kind === 'Use savings' || e.kind === 'Use surplus') && m <= month) { bump(f.available, e.person, -amt); if (m === month) bump(n.used, e.person, amt); }
       if ((e.kind === 'Investment' || e.kind === 'Prior investment') && f.goal) bump(f.goal.invested, e.person, amt);
-      if (e.kind === 'Loan payment' && f.loan && e.date >= f.loan.since) f.loan.paid += amt;
+      if (e.kind === 'Loan payment') {
+        spend(e.date, 'loan', e.person, amt);
+        let l = (f.loans || []).find((x) => x.name.toLowerCase() === String(e.category).toLowerCase());
+        if (!l && sign > 0) { l = { name: e.category, thisMonth: 0, total: 0, V: 0, K: 0, last: '' }; f.loans.push(l); }
+        if (l) { l.total += amt; bump(l, e.person, amt); if (m === month) l.thisMonth += amt; if (sign > 0 && e.date > l.last) l.last = e.date; }
+      }
       if (e.kind === 'Goal' && sign > 0) {
         f.goal = f.goal || { invested: trio(), avg: trio(), suggestions: [] };
-        Object.assign(f.goal, { target: e.amount, deadline: e.category, deadlineLabel: ymLabel(e.category), pending: true });
+        Object.assign(f.goal, { target: e.amount, deadline: e.category, deadlineLabel: ymLabel(e.category) });
       }
-      if (e.kind === 'Loan balance' && sign > 0) {
-        f.loan = { balance: e.amount, since: e.date, paid: 0, thisMonth: 0, avgPayment: f.loan ? f.loan.avgPayment : 0, payoffLabel: '' };
-      }
+      if (e.kind === 'Savings target' && sign > 0) f.savingsTarget = e.amount;
     };
-    const fundRecent = f.recent || [];
-    const mainRecent = st.recent || [];
-    const carRecent = (st.car && st.car.recent) || [];
+    const lists = { funds: f.recent || [], car: (st.car && st.car.recent) || [], main: st.recent || [] };
     for (const op of getQueue()) {
-      const list = op.table === 'funds' ? fundRecent : op.table === 'car' ? carRecent : mainRecent;
-      const e = op.op === 'add' ? op.entry : list.find((r) => r.id === op.id);
+      const e = op.op === 'add' ? op.entry : lists[op.table || 'main'].find((r) => r.id === op.id);
       if (!e) continue;
       const sign = op.op === 'add' ? 1 : -1;
-      if (op.table === 'funds') { applyFund(e, sign); continue; }
-      if (op.table === 'car') {
-        if (e.category !== 'Settlement') spend(e.date, 'sonata', e.expenseFor || e.paidBy, sign * e.amount);
-        continue;
-      }
+      if (op.table === 'funds') { f.hasEntries = true; applyFund(e, sign); continue; }
+      if (op.table === 'car') { if (e.category !== 'Settlement') spend(e.date, 'sonata', e.expenseFor || e.paidBy, sign * e.amount); continue; }
       if (e.type === 'Joint' || e.type === 'Fixed') spend(e.date, e.type.toLowerCase(), 'Both', sign * e.amount);
       if (e.type === 'Personal') spend(e.date, 'personal', e.expenseFor || e.paidBy, sign * e.amount);
     }
-    const r2all = (o) => { for (const k of Object.keys(o)) o[k] = round2(o[k]); };
-    ['income', 'personal', 'sonata', 'invest', 'loan', 'out', 'left', 'used'].forEach((k) => r2all(n[k]));
-    n.joint = round2(n.joint); n.fixed = round2(n.fixed);
-    r2all(f.rolling);
+    const r2 = (o) => { for (const k of Object.keys(o)) if (typeof o[k] === 'number') o[k] = round2(o[k]); return o; };
+    ['income', 'shared', 'personal', 'sonata', 'loan', 'spent', 'invest', 'savings', 'kept', 'investSaved', 'used'].forEach((k) => r2(n[k]));
+    r2(f.available);
+    for (const k of ['joint', 'fixed', 'sonataShared']) n[k] = round2(n[k]);
+    const rateOf = (k, inc) => (inc > 0 ? round2((k / inc) * 100) : null);
+    n.rate = { V: rateOf(n.kept.V, n.income.V), K: rateOf(n.kept.K, n.income.K), total: rateOf(n.kept.total, n.income.total) };
+    n.savedAfter = r2({ V: f.available.V + n.savings.V, K: f.available.K + n.savings.K, total: f.available.total + n.savings.total });
+    for (const l of f.loans || []) r2(l);
+
+    // Where this month's savings come from, from the live joint and personal budgets.
+    const jb = estimate();
+    const pb = estimatePersonal();
+    const jointLeft = jb.hasBalance ? jb.balance : null;
+    const personalLeft = { V: pb.V ? pb.V.remaining : null, K: pb.K ? pb.K.remaining : null };
+    const fromJoint = r2({ V: jointLeft === null ? 0 : jointLeft / 2, K: jointLeft === null ? 0 : jointLeft / 2, total: jointLeft || 0 });
+    const fromPersonal = r2({ V: personalLeft.V || 0, K: personalLeft.K || 0, total: (personalLeft.V || 0) + (personalLeft.K || 0) });
+    n.budgets = { jointLeft, personalLeft, fromJoint, fromPersonal,
+      rest: r2({ V: n.savings.V - fromJoint.V - fromPersonal.V, K: n.savings.K - fromJoint.K - fromPersonal.K, total: n.savings.total - fromJoint.total - fromPersonal.total }) };
+
+    if (f.savingsTarget !== null && f.savingsTarget !== undefined) {
+      const pct = f.savingsTarget;
+      const prevExp = f.safe && f.safe.expected ? f.safe.expected : trio();
+      const expected = r2({ V: Math.max(n.income.V, prevExp.V), K: Math.max(n.income.K, prevExp.K), total: 0 });
+      expected.total = round2(expected.V + expected.K);
+      const allowance = r2({ V: expected.V * (1 - pct / 100), K: expected.K * (1 - pct / 100), total: expected.total * (1 - pct / 100) });
+      const left = r2({ V: allowance.V - n.spent.V, K: allowance.K - n.spent.K, total: allowance.total - n.spent.total });
+      const days = daysLeftInMonth();
+      const used = allowance.total > 0 ? round2((n.spent.total / allowance.total) * 100) : n.spent.total > 0 ? 100 : 0;
+      f.safe = { percent: pct, expected, allowance, spent: n.spent, left, daysLeft: days, perDay: round2(Math.max(0, left.total) / days), used,
+        status: used > 100 ? 'over' : used >= 80 ? 'warn' : 'ok', estimated: expected.total > n.income.total + 0.005 };
+    }
     if (f.goal) {
       const g = f.goal;
-      r2all(g.invested);
+      r2(g.invested);
+      g.invested.total = round2(g.invested.V + g.invested.K);
       g.monthsLeft = Math.max(0, monthsBetween(month, g.deadline) + 1);
-      const half = g.target / 2;
-      g.togo = { V: round2(Math.max(0, half - g.invested.V)), K: round2(Math.max(0, half - g.invested.K)) };
+      g.togo = { V: round2(Math.max(0, g.target / 2 - g.invested.V)), K: round2(Math.max(0, g.target / 2 - g.invested.K)) };
       g.togo.total = round2(g.togo.V + g.togo.K);
       const div = g.monthsLeft || 1;
       g.need = { V: round2(g.togo.V / div), K: round2(g.togo.K / div) };
       g.need.total = round2(g.need.V + g.need.K);
       g.percent = g.target ? Math.min(100, round2((g.invested.total / g.target) * 100)) : 0;
-      g.thisMonth = n.invest;
-      if (changed || base === null || (base && base.month !== month)) {
-        // The monthly target changes with every entry; the rest of the suggestions refresh on sync.
+      g.thisMonth = r2({ V: n.invest.V + n.investSaved.V, K: n.invest.K + n.investSaved.K, total: n.invest.total + n.investSaved.total });
+      if (changed || !base || base.month !== month) {
         const first = g.togo.total <= 0 ? 'Goal reached. Set a new goal to keep going.'
           : g.monthsLeft > 0
             ? `Invest ${usd0(g.need.total)} a month together (V ${usd0(g.need.V)}, K ${usd0(g.need.K)}) for the next ${g.monthsLeft} month${g.monthsLeft === 1 ? '' : 's'} to reach ${usd0(g.target)} by ${g.deadlineLabel}.`
@@ -1570,13 +1662,9 @@
         g.suggestions = [first, ...(g.suggestions || []).slice(1)];
       }
     }
-    if (f.loan) {
-      f.loan.paid = round2(f.loan.paid);
-      f.loan.remaining = round2(Math.max(0, f.loan.balance - f.loan.paid));
-      if (f.loan.remaining <= 0) f.loan.payoffLabel = 'Paid off';
-    }
     return f;
   }
+  const hasFunds = () => !!((getState() || {}).funds || {}).hasEntries || getQueue().some((op) => op.table === 'funds');
 
   function cell(tr, text, cls, tag) {
     const td = document.createElement(tag || 'td');
@@ -1586,47 +1674,94 @@
     tr.appendChild(td);
     return td;
   }
-  const tone = (v) => (v <= -0.01 ? 'neg' : v >= 0.01 ? 'pos' : '');
+  function tableRows(body, rows) {
+    body.innerHTML = '';
+    for (const [name, a, b, c, cls, fmt] of rows) {
+      const tr = document.createElement('tr');
+      if (cls) tr.className = cls;
+      cell(tr, name, '', 'th');
+      for (const x of [a, b, c]) cell(tr, (fmt || money)(x), cls === 'left-row' ? tone(x) : '');
+      body.appendChild(tr);
+    }
+  }
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
 
   function renderMoney() {
     const f = fundsEstimate();
     const n = f.now;
-    const ready = !!(getState() || {}).funds || getQueue().some((op) => op.table === 'funds');
-    $('mMonthTitle').textContent = `${monthName(f.month + '-01')} money`;
-    $('mLeft').textContent = ready ? money(Math.abs(n.left.total)) : '—';
-    $('mLeft').classList.toggle('neg', n.left.total < 0);
-    $('mLeftWord').textContent = n.left.total < 0 ? 'short this month' : 'left this month';
+    const ready = hasFunds();
+    const monthWord = monthName(f.month + '-01');
 
-    const half = (v) => round2(v / 2);
-    const rows = [
-      ['Income', n.income.total, n.income.V, n.income.K],
-      ['Joint (half each)', n.joint, half(n.joint), half(n.joint)],
-      ['Fixed (half each)', n.fixed, half(n.fixed), half(n.fixed)],
-      ['Personal', round2(n.personal.V + n.personal.K), n.personal.V, n.personal.K],
-      ['Sonata', n.sonata.total, n.sonata.V, n.sonata.K],
-      ['Invested', n.invest.total, n.invest.V, n.invest.K],
-      ['Loan', n.loan.total, n.loan.V, n.loan.K],
-      ['Total out', n.out.total, n.out.V, n.out.K, 'total'],
-      ['Left', n.left.total, n.left.V, n.left.K, 'left-row'],
-    ];
-    const body = $('mTable');
-    body.innerHTML = '';
-    for (const [name, c, v, k, cls] of rows) {
-      const tr = document.createElement('tr');
-      if (cls) tr.className = cls;
-      cell(tr, name, '', 'th');
-      for (const x of [c, v, k]) cell(tr, money(x), cls === 'left-row' ? tone(x) : '');
-      body.appendChild(tr);
+    // Safe to spend
+    const sf = f.safe;
+    $('mSafeBody').hidden = !sf;
+    $('safeBtn').textContent = sf ? `Keeping ${sf.percent}% · change` : 'Set savings target';
+    if (sf) {
+      $('mSafe').textContent = money(Math.abs(sf.left.total));
+      $('mSafe').classList.toggle('neg', sf.left.total < 0);
+      $('mSafeWord').textContent = sf.left.total < 0 ? 'over this month' : 'left this month';
+      const fill = $('mSafeFill');
+      fill.style.width = Math.min(100, sf.used) + '%';
+      fill.className = 'meter-fill' + (sf.status === 'over' ? ' over' : sf.status === 'warn' ? ' warn' : '');
+      fill.parentElement.setAttribute('aria-valuenow', String(Math.round(Math.min(100, sf.used))));
+      $('mSafeV').textContent = money(sf.left.V);
+      $('mSafeK').textContent = money(sf.left.K);
+      $('mSafeDay').textContent = sf.left.total > 0 ? money(sf.perDay) : '—';
+      $('mSafeNote').textContent = `Spent ${money(sf.spent.total)} of ${money(sf.allowance.total)} you can spend in ${monthWord} and still keep ${sf.percent}% of income` +
+        (sf.estimated ? ` (income expected ${money(sf.expected.total)}, from recent months until every paycheck is in)` : '') + '. Loan payments count as spending.';
+    } else {
+      $('mSafeNote').textContent = 'Pick how much of your income to keep each month (invested + savings, say 70%). This shows what you can still spend without dipping into it.';
     }
 
-    // Rolling savings
-    $('mRolling').textContent = money(f.rolling.total);
-    $('mRolling').classList.toggle('neg', f.rolling.total < 0);
-    $('mRollV').textContent = money(f.rolling.V);
-    $('mRollK').textContent = money(f.rolling.K);
-    $('mRollAfter').textContent = money(round2(f.rolling.total + n.left.total));
-    $('mRollNote').textContent = (n.used.total ? `${money(n.used.total)} used this month. ` : '') +
-      `Earlier months' leftovers, kept apart from this month. ${monthName(f.month + '-01')}'s left joins it on the 1st. To spend some, pick Funds > Savings below.`;
+    // This month
+    $('mMonthTitle').textContent = `${monthWord} money`;
+    $('mSaved').textContent = ready ? money(Math.abs(n.savings.total)) : '—';
+    $('mSaved').classList.toggle('neg', n.savings.total < 0);
+    $('mSavedWord').textContent = n.savings.total < 0 ? 'short this month' : 'savings this month';
+    tableRows($('mTable'), [
+      ['Income', n.income.V, n.income.K, n.income.total],
+      ['Joint + Fixed (half each)', n.shared.V, n.shared.K, n.shared.total],
+      ['Personal', n.personal.V, n.personal.K, n.personal.total],
+      ['Sonata', n.sonata.V, n.sonata.K, n.sonata.total],
+      ['Loan payments', n.loan.V, n.loan.K, n.loan.total],
+      ['Spent', n.spent.V, n.spent.K, n.spent.total, 'total'],
+      ['Invested', n.invest.V, n.invest.K, n.invest.total],
+      ['Savings', n.savings.V, n.savings.K, n.savings.total, 'left-row'],
+      ['Kept (invested + savings)', n.rate.V, n.rate.K, n.rate.total, '', pctText],
+    ]);
+    const b = n.budgets;
+    const anyBudget = b.jointLeft !== null || b.personalLeft.V !== null || b.personalLeft.K !== null;
+    $('mFromCard').hidden = !anyBudget || !ready;
+    if (anyBudget) {
+      const rows = [];
+      if (b.jointLeft !== null) rows.push(['Joint budget left (half each)', b.fromJoint.V, b.fromJoint.K, b.fromJoint.total]);
+      if (b.personalLeft.V !== null || b.personalLeft.K !== null) rows.push(['Personal budget left', b.fromPersonal.V, b.fromPersonal.K, b.fromPersonal.total]);
+      rows.push(['Rest of income (not budgeted)', b.rest.V, b.rest.K, b.rest.total]);
+      rows.push(['Savings this month', n.savings.V, n.savings.K, n.savings.total, 'total']);
+      tableRows($('mFrom'), rows);
+    }
+    const sharedAll = round2(n.joint + n.fixed + n.sonataShared);
+    tableRows($('mShared'), [
+      ['Joint spending', n.joint, n.joint / 2, n.joint / 2],
+      ['Fixed bills', n.fixed, n.fixed / 2, n.fixed / 2],
+      ['Sonata (joint)', n.sonataShared, n.sonataShared / 2, n.sonataShared / 2],
+      ['Total shared', sharedAll, sharedAll / 2, sharedAll / 2, 'total'],
+    ]);
+
+    // Savings from earlier months
+    $('mSurplus').textContent = money(f.available.total);
+    $('mSurplus').classList.toggle('neg', f.available.total < 0);
+    $('mSurplusV').textContent = money(f.available.V);
+    $('mSurplusK').textContent = money(f.available.K);
+    $('mSurplusAfter').textContent = money(n.savedAfter.total);
+    const moved = [n.used.total ? `${money(n.used.total)} spent from it` : '', n.investSaved.total ? `${money(n.investSaved.total)} invested from it` : ''].filter(Boolean);
+    $('mSurplusNote').textContent = (moved.length ? `This month: ${moved.join(', ')}. ` : '') +
+      `Kept in earlier months and not decided yet; your call. ${monthWord}'s savings join it on the 1st. Invest it (Invest > From: Savings) or spend it (Savings).`;
 
     // Goal
     const g = f.goal;
@@ -1639,53 +1774,46 @@
       $('mGoalOf').textContent = `${money(g.invested.total)} of ${usd0(g.target)}`;
       $('mGoalFill').style.width = g.percent + '%';
       $('mGoalFill').parentElement.setAttribute('aria-valuenow', String(Math.round(g.percent)));
-      const gb = $('mGoalTable');
-      gb.innerHTML = '';
-      for (const [name, o] of [['Invested', g.invested], ['To go', g.togo], ['Needed / month', g.need], ['This month', g.thisMonth || trio()]]) {
-        const tr = document.createElement('tr');
-        cell(tr, name, '', 'th');
-        for (const x of [o.total, o.V, o.K]) cell(tr, usd0(x)); // whole dollars: six figures fit on a phone
-        gb.appendChild(tr);
-      }
+      tableRows($('mGoalTable'), [['Invested', g.invested.V, g.invested.K, g.invested.total, '', usd0], ['To go', g.togo.V, g.togo.K, g.togo.total, '', usd0],
+        ['Needed / month', g.need.V, g.need.K, g.need.total, '', usd0], ['This month', g.thisMonth.V, g.thisMonth.K, g.thisMonth.total, '', usd0]]);
       const pace = $('mGoalPace');
-      const tm = (g.thisMonth || trio()).total;
       if (g.togo.total <= 0) { pace.textContent = 'Goal reached'; pace.className = 'status cleared'; }
       else if (!g.monthsLeft) { pace.textContent = `Deadline passed · ${usd0(g.togo.total)} to go`; pace.className = 'status open'; }
       else {
-        const gap = round2(g.need.total - tm);
-        pace.textContent = `${g.monthsLeft} month${g.monthsLeft === 1 ? '' : 's'} left (incl. ${monthName(f.month + '-01')}) · ` +
+        const gap = round2(g.need.total - g.thisMonth.total);
+        pace.textContent = `${g.monthsLeft} month${g.monthsLeft === 1 ? '' : 's'} left (incl. ${monthWord}) · ` +
           (gap > 0 ? `${money(gap)} more to invest this month to stay on pace` : 'On pace this month');
         pace.className = 'status ' + (gap > 0 ? 'open' : 'cleared');
       }
       const ul = $('mSuggest');
       ul.innerHTML = '';
-      for (const t of g.suggestions || []) { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); }
+      for (const t of g.suggestions || []) ul.appendChild(el('li', '', t));
     } else {
       $('mGoalTitle').textContent = 'Savings goal';
     }
 
-    // Loan
-    const l = f.loan;
-    $('mLoanBody').hidden = !l;
-    $('mLoanEmpty').hidden = !!l;
-    $('loanBtn').textContent = l ? 'Update loan balance' : 'Set loan balance';
-    if (l) {
-      $('mLoanLeft').textContent = money(l.remaining);
-      $('mLoanPaid').textContent = money(l.paid);
-      $('mLoanAvg').textContent = l.avgPayment ? money(l.avgPayment) : '—';
-      $('mLoanPayoff').textContent = l.payoffLabel || '…';
-      $('mLoanNote').textContent = `Balance ${money(l.balance)} as of ${prettyDate(l.since)}` +
-        (l.monthsToPay ? ` · about ${l.monthsToPay} more payment${l.monthsToPay === 1 ? '' : 's'} at the recent average` : '') + '.';
+    // Loan payments (simple logs)
+    const loans = f.loans || [];
+    $('mLoansTable').hidden = !loans.length;
+    $('mLoansEmpty').hidden = loans.length > 0;
+    const lb = $('mLoans');
+    lb.innerHTML = '';
+    for (const l of loans) {
+      const tr = document.createElement('tr');
+      cell(tr, l.name, '', 'th');
+      cell(tr, money(l.thisMonth));
+      cell(tr, money(l.total));
+      cell(tr, `${usd0(l.V)} / ${usd0(l.K)}`);
+      lb.appendChild(tr);
     }
 
     // Month by month (latest first; this month from the live estimate)
     const hb = $('mHistory');
     hb.innerHTML = '';
-    const hist = f.history.filter((h) => h.month !== f.month).concat(ready ? [{ ...n, month: f.month, rollingAfter: { total: round2(f.rolling.total + n.left.total) } }] : []);
+    const hist = f.history.filter((h) => h.month !== f.month).concat(ready ? [{ ...n, month: f.month }] : []);
     if (!hist.length) {
       const tr = document.createElement('tr');
-      const td = cell(tr, 'Log income to start the monthly picture.', 'muted');
-      td.colSpan = 5;
+      cell(tr, 'Log income to start the monthly picture.', 'muted').colSpan = 5;
       hb.appendChild(tr);
     }
     for (const h of hist.slice(-12).reverse()) {
@@ -1693,11 +1821,16 @@
       if (h.month === f.month) tr.className = 'current';
       cell(tr, shortMonth(h.month) + (h.month.slice(0, 4) !== f.month.slice(0, 4) ? ' ' + h.month.slice(2, 4) : ''));
       cell(tr, usd0(h.income.total));
-      cell(tr, usd0(h.out.total));
-      cell(tr, usd0(h.left.total), tone(h.left.total));
-      cell(tr, usd0(h.rollingAfter.total), tone(h.rollingAfter.total));
+      cell(tr, usd0(h.spent.total));
+      cell(tr, usd0(h.invest.total));
+      cell(tr, usd0(h.savings.total), tone(h.savings.total));
       hb.appendChild(tr);
     }
+
+    const rc = f.recap;
+    $('mRecapNote').textContent = rc && rc.on ? `Sending to ${rc.to.split(',').join(', ')} every Sunday evening.` :
+      'A short email every Sunday evening: spending vs last month, safe to spend, savings, goal and loan payments.';
+    $('recapBtn').textContent = rc && rc.on ? 'Change weekly email' : 'Set up weekly email';
   }
 
   function renderMoneyRecent() {
@@ -1708,46 +1841,125 @@
     const rows = [...pending, ...((f && f.recent) || []).filter((r) => !deleting.has(r.id))];
     const list = $('recentList');
     list.innerHTML = '';
-    if (!rows.length) {
-      const li = document.createElement('li');
-      li.className = 'empty';
-      li.textContent = 'Nothing yet.';
-      list.appendChild(li);
-    }
+    if (!rows.length) list.appendChild(el('li', 'empty', 'Nothing yet.'));
     for (const r of rows) {
-      const li = document.createElement('li');
-      li.className = [KIND_CLASS[r.kind] || '', r.pending ? 'pending' : ''].filter(Boolean).join(' ');
-      const body = document.createElement('div');
-      body.className = 'body';
-      const top = document.createElement('div');
-      top.className = 'top';
-      const name = document.createElement('span');
-      name.textContent = r.kind === 'Goal' ? `Goal by ${ymLabel(r.category)}` : r.category || KIND_TAGS[r.kind];
-      const amt = document.createElement('span');
-      amt.textContent = (r.kind === 'Income' ? '+' : '') + money(r.amount);
-      top.append(name, amt);
-      const sub = document.createElement('div');
-      sub.className = 'sub';
-      const tag = document.createElement('span');
-      tag.className = 'tag';
-      tag.textContent = KIND_TAGS[r.kind] || r.kind;
-      const parts = [prettyDate(r.date), r.person === 'Both' ? 'V + K' : r.person, r.notes];
-      sub.append(tag, document.createTextNode(parts.filter(Boolean).join(' · ')));
+      const li = el('li', [KIND_CLASS[r.kind] || '', r.pending ? 'pending' : ''].filter(Boolean).join(' '));
+      const body = el('div', 'body');
+      const top = el('div', 'top');
+      const title = r.kind === 'Goal' ? `Goal by ${ymLabel(r.category)}` : r.kind === 'Savings target' ? 'Savings target' : r.category || KIND_TAGS[r.kind];
+      top.append(el('span', '', title), el('span', '', r.kind === 'Savings target' ? `${r.amount}%` : (r.kind === 'Income' ? '+' : '') + money(r.amount)));
+      const sub = el('div', 'sub');
+      const parts = [prettyDate(r.date)];
+      if (r.person && r.kind !== 'Goal' && r.kind !== 'Savings target') parts.push(r.person === 'Both' ? 'V + K' : r.person);
+      if (r.kind === 'Investment' && (r.from === 'Savings' || r.from === 'Surplus')) parts.push('from savings');
+      parts.push(r.notes);
+      sub.append(el('span', 'tag', KIND_TAGS[r.kind] || r.kind), document.createTextNode(parts.filter(Boolean).join(' · ')));
       body.append(top, sub);
       li.appendChild(body);
       if (r.id) {
-        const del = document.createElement('button');
+        const del = el('button', 'del', '×');
         del.type = 'button';
-        del.className = 'del';
-        del.setAttribute('aria-label', `Delete ${name.textContent}`);
-        del.textContent = '×';
-        del.addEventListener('click', () => removeEntry(r, 'funds'));
+        del.setAttribute('aria-label', `Delete ${title}`);
+        del.addEventListener('click', () => removeEntry({ ...r, category: title }, 'funds'));
         li.appendChild(del);
       }
       list.appendChild(li);
     }
     const qn = getQueue().length;
     $('syncNote').textContent = qn ? `${qn} waiting to sync` : '';
+  }
+
+  // ---------- Home: one glance at everything; each tile opens its page
+  function owedStatus(p) {
+    const vShare = round2(p.v - p.spent / 2);
+    const fvShare = round2(p.fv - p.fixed / 2);
+    return statusOf(round2(vShare + fvShare + round2(p.personal || 0)), p.settledNet || 0, p.settled || 0);
+  }
+
+  function renderHome() {
+    const f = fundsEstimate();
+    const ready = hasFunds();
+    const e = estimate();
+    const p = e.period;
+    const pb = estimatePersonal();
+    const st = getState() || {};
+    const monthWord = monthName(currentMonth() + '-01');
+
+    // Hero: safe to spend if a savings target is set, else this month's savings, else the joint budget.
+    const meter = $('hHeroMeter');
+    meter.hidden = true;
+    let label = `${monthWord}`, amt = '—', word = '', note = 'Log income in Funds and set budgets in Joint and Personal to see your month here.', neg = false;
+    if (f.safe && ready) {
+      const sf = f.safe;
+      label = `Safe to spend in ${monthWord}`;
+      amt = money(Math.abs(sf.left.total));
+      neg = sf.left.total < 0;
+      word = neg ? 'over' : 'left';
+      note = neg ? `Spending is past what keeps ${sf.percent}% of income. Hold off on extras until next month.`
+        : `About ${money(sf.perDay)} a day for ${sf.daysLeft} days keeps ${sf.percent}% of income. V ${money(sf.left.V)} · K ${money(sf.left.K)}.`;
+      meter.hidden = false;
+      $('hHeroFill').style.width = Math.min(100, sf.used) + '%';
+      $('hHeroFill').className = 'meter-fill' + (sf.status === 'over' ? ' over' : sf.status === 'warn' ? ' warn' : '');
+      meter.setAttribute('aria-valuenow', String(Math.round(Math.min(100, sf.used))));
+    } else if (ready && f.now.income.total > 0) {
+      label = `Savings in ${monthWord}`;
+      amt = money(Math.abs(f.now.savings.total));
+      neg = f.now.savings.total < 0;
+      word = neg ? 'short' : `so far (${pctText(f.now.rate.total)} kept)`;
+      note = 'Set a savings target in Funds to see how much is safe to spend.';
+    } else if (e.hasBalance) {
+      label = `${monthWord} joint budget`;
+      amt = money(Math.abs(e.balance));
+      neg = e.balance < 0;
+      word = neg ? 'over budget' : 'left';
+      note = `About ${money(Math.max(0, e.balance) / daysLeftInMonth())} a day for the rest of ${monthWord}.`;
+    }
+    $('hHeroLabel').textContent = label;
+    $('hHeroAmt').textContent = amt;
+    $('hHeroAmt').classList.toggle('neg', neg);
+    $('hHeroWord').textContent = word;
+    $('hHeroNote').textContent = note;
+
+    const tiles = [];
+    const tile = (target, color, labelText, value, subText, kind) => tiles.push({ target, color, labelText, value, subText, kind });
+    if (e.hasBalance) {
+      const budget = round2(p.start + p.added);
+      tile('Joint', 'var(--accent)', 'Joint budget', e.balance < 0 ? `${money(-e.balance)} over` : `${money(e.balance)} left`, `of ${money(budget)} · spent ${money(p.spent)}`, e.balance < 0 ? 'neg' : '');
+    } else {
+      tile('Joint', 'var(--accent)', 'Joint budget', 'Not set', `Spent ${money(p.spent)} so far`);
+    }
+    const pbText = (b) => (b ? (b.remaining < 0 ? `${usd0(-b.remaining)} over` : `${usd0(b.remaining)} left`) : 'not set');
+    tile('Personal', '#3b82f6', 'Personal', `V ${pb.V ? usd0(pb.V.remaining) : '—'} · K ${pb.K ? usd0(pb.K.remaining) : '—'}`, `V ${pbText(pb.V)}, K ${pbText(pb.K)}`,
+      (pb.V && pb.V.remaining < 0) || (pb.K && pb.K.remaining < 0) ? 'neg' : '');
+    const os = owedStatus(p);
+    tile('Joint', '#22c55e', 'Who owes whom', os.kind === 'open' ? settleText(os.remaining, -os.remaining) : os.kind === 'cleared' ? 'Cleared' : 'Even',
+      os.kind === 'open' ? 'Joint + Fixed + Personal, this month' : 'Nothing owed this month', os.kind === 'cleared' ? 'good' : '');
+    tile('Fixed', '#fb923c', 'Fixed bills', money(p.fixed), `${monthWord} · V ${money(p.fv)}, K ${money(p.fk)}`);
+    const c = st.car;
+    const carMonth = c && (c.monthly || []).find((m) => m.month === currentMonth());
+    tile('Car', '#818cf8', 'Sonata', c && c.mpg ? `${Number(c.mpg).toFixed(1)} MPG` : '—', `${money(carMonth ? carMonth.total : 0)} on the car in ${monthWord}`);
+    if (ready) {
+      tile('Funds', '#22c55e', 'Savings this month', money(f.now.savings.total), `${money(f.now.invest.total)} invested · ${pctText(f.now.rate.total)} of income kept`, f.now.savings.total < 0 ? 'neg' : '');
+      tile('Funds', '#eab308', 'Savings from earlier', money(f.available.total), `Not decided yet · ${money(f.now.savedAfter.total)} after ${monthWord}`);
+    }
+    if (f.goal) tile('Funds', '#a855f7', 'Goal', `${f.goal.percent}%`, `${usd0(f.goal.need.total)} a month to reach ${usd0(f.goal.target)} by ${f.goal.deadlineLabel}`);
+    if (f.now.loan.total > 0 || (f.loans || []).length) {
+      tile('Funds', '#f87171', 'Loan payments', money(f.now.loan.total), `${monthWord} · ` + ((f.loans || []).filter((l) => l.thisMonth > 0).map((l) => l.name).join(', ') || 'none yet this month'));
+    }
+    const box = $('hTiles');
+    box.innerHTML = '';
+    for (const t of tiles) {
+      const btn = el('button', 'tile' + (t.kind ? ' ' + t.kind : ''));
+      btn.type = 'button';
+      btn.style.setProperty('--tile', t.color);
+      btn.append(el('span', 't-label', t.labelText), el('span', 't-value', t.value), el('span', 't-sub', t.subText));
+      btn.addEventListener('click', () => setView(t.target));
+      box.appendChild(btn);
+    }
+    const tips = ready ? (f.suggestions || []).slice(0, 3) : [];
+    $('hTipsCard').hidden = !tips.length;
+    $('hTips').innerHTML = '';
+    for (const t of tips) $('hTips').appendChild(el('li', '', t));
   }
 
   // ---- Goal dialog (target, deadline, investments from before tracking)
@@ -1769,7 +1981,7 @@
     if (first) { $('priorV').value = PRIOR_DEFAULT.V.toFixed(2); $('priorK').value = PRIOR_DEFAULT.K.toFixed(2); }
     goalDialog.showModal();
   });
-  for (const id of ['goalTarget', 'goalDeadline', 'priorV', 'priorK', 'loanBalance', 'loanDate']) {
+  for (const id of ['goalTarget', 'goalDeadline', 'priorV', 'priorK', 'targetPct', 'recapTo', 'payInvest', 'payLoan', 'moneyOther']) {
     $(id).addEventListener('input', () => $(id).classList.remove('invalid'));
   }
   $('goalForm').addEventListener('submit', async (e) => {
@@ -1799,26 +2011,129 @@
     report(status, `Goal set ✓ ${usd0(target)} by ${ymLabel(deadline)}` + (g && g.monthsLeft ? ` · ${usd0(g.need.total)} a month` : ''));
   });
 
-  // ---- Loan balance dialog
-  const loanDialog = $('loanDialog');
-  $('loanBtn').addEventListener('click', () => {
-    $('loanForm').reset();
-    clearInvalid($('loanForm'));
-    const l = fundsEstimate().loan;
-    if (l) $('loanBalance').value = l.remaining.toFixed(2);
-    $('loanDate').value = today();
-    loanDialog.showModal();
+  // ---- Savings target (safe to spend)
+  const targetDialog = $('targetDialog');
+  function updateTargetHint() {
+    const pct = parseAmount($('targetPct').value.replace('%', ''));
+    const f = fundsEstimate();
+    const income = f.safe ? f.safe.expected.total : f.now.income.total;
+    $('targetHint').textContent = pct !== null && pct >= 0 && pct <= 95 && income > 0
+      ? `With ${money(income)} income this month: keep ${money(income * pct / 100)}, spend up to ${money(income * (1 - pct / 100))}.` : '';
+  }
+  $('targetPct').addEventListener('input', updateTargetHint);
+  $('safeBtn').addEventListener('click', () => {
+    $('targetForm').reset();
+    clearInvalid($('targetForm'));
+    const f = fundsEstimate();
+    $('targetPct').value = f.savingsTarget !== null && f.savingsTarget !== undefined ? String(f.savingsTarget) : '70';
+    updateTargetHint();
+    targetDialog.showModal();
   });
-  $('loanForm').addEventListener('submit', async (e) => {
+  $('targetForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (e.submitter && e.submitter.value === 'cancel') return loanDialog.close();
-    const amount = parseAmount($('loanBalance').value);
-    if (amount === null || amount < 0) return $('loanBalance').classList.add('invalid');
-    if (!$('loanDate').value) return $('loanDate').classList.add('invalid');
-    loanDialog.close();
-    enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date: $('loanDate').value, kind: 'Loan balance', category: 'Loan', amount, person: 'V', notes: '' } });
+    if (e.submitter && e.submitter.value === 'cancel') return targetDialog.close();
+    const pct = parseAmount($('targetPct').value.replace('%', ''));
+    if (pct === null || pct < 0 || pct > 95) return $('targetPct').classList.add('invalid');
+    targetDialog.close();
+    enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date: today(), kind: 'Savings target', amount: pct, person: 'Both', notes: '' } });
     const status = await sync();
-    report(status, `Loan balance set ✓ ${money(amount)}`);
+    const sf = fundsEstimate().safe;
+    report(status, `Keeping ${pct}% ✓` + (sf ? ` · ${money(sf.left.total)} safe to spend this month` : ''));
+  });
+
+  // ---- Weekly email (needs a connection: it changes the sheet's script settings directly)
+  const recapDialog = $('recapDialog');
+  $('recapBtn').addEventListener('click', () => {
+    $('recapForm').reset();
+    clearInvalid($('recapForm'));
+    const rc = fundsEstimate().recap;
+    $('recapTo').value = rc && rc.to ? rc.to.split(',').join(', ') : '';
+    $('recapOn').checked = rc ? rc.on || !rc.to : true;
+    recapDialog.showModal();
+  });
+  $('recapForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const action = e.submitter ? e.submitter.value : 'save';
+    if (action === 'cancel') return recapDialog.close();
+    const on = $('recapOn').checked || action === 'test';
+    const to = $('recapTo').value.trim();
+    if (on && !/@/.test(to)) return markInvalid($('recapTo'), 'Enter one or two email addresses.');
+    const st = getState();
+    if (st && st.version < 20) return showBanner(OUTDATED_MESSAGE, 'err', true);
+    recapDialog.close();
+    try {
+      const data = await call({ action: 'recap', on, to, test: action === 'test' });
+      saveState(data);
+      render();
+      showBanner(action === 'test' ? (data.recapSent ? 'Saved ✓ Test email sent' : 'Saved ✓') : on ? 'Weekly email on ✓ every Sunday evening' : 'Weekly email off', 'ok');
+    } catch (err) {
+      showBanner(err.kind === 'network' ? 'Needs a connection. Try again when online.' : err.message, 'err', true);
+    }
+  });
+
+  // ---- Payday plan: after a salary is logged, suggest how to split it and log it in one tap.
+  // It always leaves room for spending: at least (100% - savings target) of the paycheck, or last month's
+  // spending per paycheck, whichever is more.
+  const paydayDialog = $('paydayDialog');
+  let payday = null;
+  function openPayday(income) {
+    const f = fundsEstimate();
+    const who = income.person;
+    const salaries = (f.recent || []).concat(getQueue().filter((op) => op.table === 'funds' && op.op === 'add').map((op) => op.entry))
+      .filter((r) => r.kind === 'Income' && r.person === who && r.category === 'Salary' && String(r.date).slice(0, 7) === currentMonth())
+      .filter((r, i, a) => a.findIndex((x) => x.id === r.id) === i).length;
+    const checksLeft = salaries >= 2 ? 1 : 2; // usually two paychecks a month
+    const last = f.history.filter((h) => h.month !== f.month).pop();
+    const spendPerCheck = Math.max(0, (last ? last.spent[who] - last.loan[who] : 0) / 2);
+    const floorKeep = Math.max(spendPerCheck, f.savingsTarget !== null && f.savingsTarget !== undefined ? income.amount * (1 - f.savingsTarget / 100) : 0);
+    const loanSug = Math.round(Math.max(0, ((f.loanUsual || {})[who] || 0) - f.now.loan[who]) / checksLeft);
+    let investSug = f.goal ? Math.max(0, f.goal.need[who] - f.goal.thisMonth[who]) / checksLeft
+      : f.savingsTarget ? income.amount * f.savingsTarget / 100 : 0;
+    investSug = Math.round(Math.max(0, Math.min(investSug, income.amount - loanSug - floorKeep)));
+    payday = { who, income, floorKeep };
+    $('paydayTitle').textContent = `${who}'s payday plan`;
+    $('paydayIntro').textContent = `${money(income.amount)} came in. A split that keeps you on track` +
+      (f.goal ? ` for ${usd0(f.goal.target)} by ${f.goal.deadlineLabel}` : '') + ' and leaves room to spend. Change the amounts, or Skip.';
+    $('payInvest').value = investSug ? String(investSug) : '';
+    $('payWhere').value = who === 'K' ? 'India' : 'USA';
+    const names = (f.loans || []).map((l) => l.name);
+    $('loanNames').innerHTML = '';
+    for (const nm of names) $('loanNames').appendChild(new Option(nm));
+    const lastLoan = (f.loans || []).filter((l) => l[who] > 0).sort((a, b) => (a.last < b.last ? 1 : -1))[0];
+    $('payLoanName').value = lastLoan ? lastLoan.name : names[0] || '';
+    $('payLoan').value = loanSug ? String(loanSug) : '';
+    updatePaydayKeep();
+    paydayDialog.showModal();
+  }
+  function updatePaydayKeep() {
+    if (!payday) return;
+    const inv = parseAmount($('payInvest').value) || 0;
+    const loan = parseAmount($('payLoan').value) || 0;
+    const keep = round2(payday.income.amount - inv - loan);
+    $('paydayKeep').textContent = `Leaves ${money(keep)} for spending and savings` + (payday.floorKeep ? ` (suggested at least ${money(payday.floorKeep)}).` : '.');
+    $('paydayKeep').classList.toggle('warn', keep < payday.floorKeep - 0.5);
+  }
+  $('payInvest').addEventListener('input', updatePaydayKeep);
+  $('payLoan').addEventListener('input', updatePaydayKeep);
+  $('paydayForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (e.submitter && e.submitter.value === 'cancel') { paydayDialog.close(); payday = null; return; }
+    const inv = $('payInvest').value.trim() === '' ? 0 : parseAmount($('payInvest').value);
+    const loan = $('payLoan').value.trim() === '' ? 0 : parseAmount($('payLoan').value);
+    const loanName = $('payLoanName').value.trim();
+    if (inv === null || inv < 0) return $('payInvest').classList.add('invalid');
+    if (loan === null || loan < 0) return $('payLoan').classList.add('invalid');
+    if (loan > 0 && !loanName) return $('payLoanName').classList.add('invalid');
+    paydayDialog.close();
+    const { who } = payday;
+    const date = payday.income.date;
+    const logged = [];
+    if (inv > 0) { enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date, kind: 'Investment', category: $('payWhere').value, amount: inv, person: who, from: 'Income', notes: 'Payday plan' } }); logged.push(`invested ${money(inv)}`); }
+    if (loan > 0) { enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date, kind: 'Loan payment', category: loanName, amount: loan, person: who, notes: 'Payday plan' } }); logged.push(`${money(loan)} to ${loanName}`); }
+    payday = null;
+    if (!logged.length) return;
+    const status = await sync();
+    report(status, `Logged ✓ ${logged.join(', ')}`);
   });
 
   // ---------- Settings
@@ -1859,8 +2174,7 @@
 
   $('date').value = today();
   $('paidBy').value = store.get('paidBy', 'V');
-  updateTypeHint();
-  render();
+  setView(view);
 
   if (!getSettings()) openSettings();
   else sync().then((s) => report(s, null));
@@ -1870,7 +2184,7 @@
     if (document.visibilityState !== 'visible') return;
     // The app can stay open in the background for days; keep the date on today if nothing is typed yet.
     if (!$('category').value && !$('amount').value) $('date').value = today();
-    if (isMoneyMode()) render(); // a new month moves this month's left into rolling savings
+    if (view === 'Funds' || view === 'Home') render(); // a new month moves this month's savings forward
     if (getSettings()) sync();
     if (swReg) swReg.update().catch(() => {});
   });

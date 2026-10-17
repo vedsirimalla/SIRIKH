@@ -17,13 +17,25 @@
 <body>
   <header>
     <h1>Sirikh</h1>
+    <div class="nav">
+      <button id="navBtn" type="button" class="nav-btn" aria-haspopup="true" aria-expanded="false" aria-controls="navMenu">
+        <span id="navLabel">Home</span><span class="caret" aria-hidden="true">▾</span>
+      </button>
+      <ul id="navMenu" class="nav-menu" role="menu" hidden>
+        <li><button type="button" role="menuitem" data-view="Home">Home</button></li>
+        <li><button type="button" role="menuitem" data-view="Joint">Joint</button></li>
+        <li><button type="button" role="menuitem" data-view="Fixed">Fixed</button></li>
+        <li><button type="button" role="menuitem" data-view="Personal">Personal</button></li>
+        <li><button type="button" role="menuitem" data-view="Car">Sonata</button></li>
+        <li><button type="button" role="menuitem" data-view="Funds">Funds</button></li>
+      </ul>
+    </div>
     <button id="settingsBtn" class="icon-btn" type="button" aria-label="Settings">⚙︎</button>
   </header>
 
   <main>
     <div id="banner" class="banner" role="status" hidden></div>
 
-    <div id="mainDash">
     <section class="card month-prompt" id="monthPrompt" hidden>
       <p id="monthPromptText"></p>
       <div class="row">
@@ -32,6 +44,27 @@
         <button type="button" id="promptLater">Later</button>
       </div>
     </section>
+
+    <div id="homeDash" hidden>
+      <section class="card balance-card hero" aria-labelledby="hHeroLabel">
+        <div id="hHeroLabel" class="eyebrow">This month</div>
+        <div class="left-line">
+          <span id="hHeroAmt" class="balance-amount">—</span>
+          <span id="hHeroWord" class="left-word"></span>
+        </div>
+        <div class="meter" id="hHeroMeter" role="progressbar" aria-label="Spending room used" aria-valuemin="0" aria-valuemax="100" hidden>
+          <div id="hHeroFill" class="meter-fill"></div>
+        </div>
+        <div id="hHeroNote" class="pace"></div>
+      </section>
+      <div id="hTiles" class="tiles"></div>
+      <section class="card" id="hTipsCard" aria-labelledby="hTipsTitle" hidden>
+        <h2 id="hTipsTitle">Next steps</h2>
+        <ul id="hTips" class="suggest"></ul>
+      </section>
+    </div>
+
+    <div id="mainDash">
     <section class="card balance-card" id="jointCard" aria-labelledby="balanceLabel">
       <div id="balanceLabel" class="eyebrow">Monthly budget</div>
       <div class="left-line">
@@ -176,31 +209,68 @@
     </div>
 
     <div id="moneyDash" hidden>
-      <section class="card balance-card" aria-labelledby="mMonthTitle">
-        <div id="mMonthTitle" class="eyebrow">This month</div>
-        <div class="left-line">
-          <span id="mLeft" class="balance-amount">—</span>
-          <span id="mLeftWord" class="left-word">left this month</span>
+      <section class="card balance-card" aria-labelledby="mSafeTitle">
+        <div id="mSafeTitle" class="eyebrow">Safe to spend</div>
+        <div id="mSafeBody" hidden>
+          <div class="left-line">
+            <span id="mSafe" class="balance-amount">—</span>
+            <span id="mSafeWord" class="left-word">left this month</span>
+          </div>
+          <div class="meter" role="progressbar" aria-label="Spending room used" aria-valuemin="0" aria-valuemax="100">
+            <div id="mSafeFill" class="meter-fill"></div>
+          </div>
+          <div class="stats">
+            <div><span class="stat-label">V left</span><span id="mSafeV">—</span></div>
+            <div><span class="stat-label">K left</span><span id="mSafeK">—</span></div>
+            <div><span class="stat-label">Per day</span><span id="mSafeDay">—</span></div>
+          </div>
         </div>
-        <table class="split money-table">
-          <thead><tr><th scope="col"></th><th scope="col">Combined</th><th scope="col">V</th><th scope="col">K</th></tr></thead>
-          <tbody id="mTable"></tbody>
-        </table>
-        <div id="mNote" class="muted">Shared costs (Joint, Fixed, joint Sonata) count half each. Personal, own Sonata turns, investments and the loan go to their owner. Settlements are ignored.</div>
+        <div id="mSafeNote" class="pace">Pick how much of your income to save each month (say 70%). This shows what you can still spend without dipping into it.</div>
+        <div class="row"><button type="button" id="safeBtn" class="full">Set savings target</button></div>
       </section>
 
-      <section class="card" aria-labelledby="mRollTitle">
-        <div id="mRollTitle" class="eyebrow">Rolling savings</div>
+      <section class="card" aria-labelledby="mMonthTitle">
+        <div id="mMonthTitle" class="eyebrow">This month</div>
         <div class="left-line">
-          <span id="mRolling" class="balance-amount">—</span>
-          <span class="left-word">saved</span>
+          <span id="mSaved" class="balance-amount">—</span>
+          <span id="mSavedWord" class="left-word">savings</span>
+        </div>
+        <table class="split money-table">
+          <thead><tr><th scope="col"></th><th scope="col">V</th><th scope="col">K</th><th scope="col">Total</th></tr></thead>
+          <tbody id="mTable"></tbody>
+        </table>
+        <div class="muted">Savings = income minus everything spent minus investments: money kept but not decided on yet. Shared costs count half each; settlements are ignored.</div>
+      </section>
+
+      <section class="card" aria-labelledby="mFromTitle" id="mFromCard" hidden>
+        <div id="mFromTitle" class="eyebrow">Where this month's savings come from</div>
+        <table class="split money-table">
+          <thead><tr><th scope="col"></th><th scope="col">V</th><th scope="col">K</th><th scope="col">Total</th></tr></thead>
+          <tbody id="mFrom"></tbody>
+        </table>
+        <div class="muted">Unspent joint budget (half each) and unspent personal budget are already inside this month's savings; this only shows where they came from.</div>
+      </section>
+
+      <section class="card" aria-labelledby="mSharedTitle">
+        <div id="mSharedTitle" class="eyebrow">Shared this month</div>
+        <table class="split money-table">
+          <thead><tr><th scope="col"></th><th scope="col">Amount</th><th scope="col">V half</th><th scope="col">K half</th></tr></thead>
+          <tbody id="mShared"></tbody>
+        </table>
+      </section>
+
+      <section class="card" aria-labelledby="mSurplusTitle">
+        <div id="mSurplusTitle" class="eyebrow">Savings from earlier months</div>
+        <div class="left-line">
+          <span id="mSurplus" class="balance-amount">—</span>
+          <span class="left-word">to decide</span>
         </div>
         <div class="stats">
-          <div><span class="stat-label">V</span><span id="mRollV">—</span></div>
-          <div><span class="stat-label">K</span><span id="mRollK">—</span></div>
-          <div><span class="stat-label">After this month</span><span id="mRollAfter">—</span></div>
+          <div><span class="stat-label">V</span><span id="mSurplusV">—</span></div>
+          <div><span class="stat-label">K</span><span id="mSurplusK">—</span></div>
+          <div><span class="stat-label">After this month</span><span id="mSurplusAfter">—</span></div>
         </div>
-        <div id="mRollNote" class="pace">Leftovers from earlier months, kept apart from this month. To spend some, pick Funds &gt; Savings below.</div>
+        <div id="mSurplusNote" class="pace"></div>
       </section>
 
       <section class="card goal-card" aria-labelledby="mGoalTitle">
@@ -214,43 +284,40 @@
             <div id="mGoalFill" class="meter-fill"></div>
           </div>
           <table class="split money-table">
-            <thead><tr><th scope="col"></th><th scope="col">Combined</th><th scope="col">V</th><th scope="col">K</th></tr></thead>
+            <thead><tr><th scope="col"></th><th scope="col">V</th><th scope="col">K</th><th scope="col">Total</th></tr></thead>
             <tbody id="mGoalTable"></tbody>
           </table>
           <div id="mGoalPace" class="status"></div>
           <ul id="mSuggest" class="suggest"></ul>
         </div>
-        <div id="mGoalEmpty" class="pace">Set a target and a deadline. Investments (401(K), India, USA...) count toward it, split equally between V and K.</div>
+        <div id="mGoalEmpty" class="pace">Set a target and a deadline. Investments (401(K), India, USA...) count toward it, split equally between V and K. Savings count once you invest them.</div>
         <div class="row"><button type="button" id="goalBtn" class="full">Set goal</button></div>
       </section>
 
-      <section class="card loan-card" aria-labelledby="mLoanTitle">
-        <div id="mLoanTitle" class="eyebrow">V's loan</div>
-        <div id="mLoanBody" hidden>
-          <div class="left-line">
-            <span id="mLoanLeft" class="balance-amount">—</span>
-            <span class="left-word">remaining</span>
-          </div>
-          <div class="stats">
-            <div><span class="stat-label">Paid since</span><span id="mLoanPaid">—</span></div>
-            <div><span class="stat-label">Avg / month</span><span id="mLoanAvg">—</span></div>
-            <div><span class="stat-label">Paid off by</span><span id="mLoanPayoff">—</span></div>
-          </div>
-          <div id="mLoanNote" class="pace"></div>
-        </div>
-        <div id="mLoanEmpty" class="pace">Enter the loan balance once. Each Loan payment then counts it down and estimates the payoff month.</div>
-        <div class="row"><button type="button" id="loanBtn" class="full">Set loan balance</button></div>
+      <section class="card loan-card" aria-labelledby="mLoansTitle">
+        <div id="mLoansTitle" class="eyebrow">Loan payments</div>
+        <table class="split money-table" id="mLoansTable" hidden>
+          <thead><tr><th scope="col">Loan</th><th scope="col">This month</th><th scope="col">Total</th><th scope="col">V / K</th></tr></thead>
+          <tbody id="mLoans"></tbody>
+        </table>
+        <div id="mLoansEmpty" class="pace">Log what you send toward a loan with Loan below (which loan, how much, who paid). It counts as spending for that month.</div>
       </section>
 
       <section class="card" aria-labelledby="mHistTitle">
         <div class="section-head">
           <h2 id="mHistTitle">Month by month</h2>
-          <span class="muted">Combined</span>
+          <span class="muted">Total</span>
         </div>
         <table class="split history-table">
-          <thead><tr><th scope="col">Month</th><th scope="col">Income</th><th scope="col">Out</th><th scope="col">Left</th><th scope="col">Rolling</th></tr></thead>
+          <thead><tr><th scope="col">Month</th><th scope="col">Income</th><th scope="col">Spent</th><th scope="col">Invested</th><th scope="col">Savings</th></tr></thead>
           <tbody id="mHistory"></tbody>
         </table>
+      </section>
+
+      <section class="card" aria-labelledby="mRecapTitle">
+        <div id="mRecapTitle" class="eyebrow">Weekly email</div>
+        <div id="mRecapNote" class="pace">A short email every Sunday evening: spending vs last month, safe to spend, savings, goal and loan payments.</div>
+        <div class="row"><button type="button" id="recapBtn" class="full">Set up weekly email</button></div>
       </section>
     </div>
 
@@ -259,8 +326,8 @@
         <input type="date" id="date" required>
       </label>
 
-      <fieldset class="seg-field">
-        <legend>Type</legend>
+      <fieldset class="seg-field" id="typeField">
+        <legend>Add</legend>
         <div class="seg" id="typeSeg">
           <input type="radio" name="type" id="typeJoint" value="Joint" checked>
           <label for="typeJoint">Joint</label>
@@ -345,9 +412,14 @@
           <div id="moneyPicker" class="chips money-chips" role="radiogroup" aria-labelledby="moneyCatLabel"></div>
           <input type="text" id="moneyOther" aria-labelledby="moneyCatLabel" autocapitalize="words" autocomplete="off" hidden>
         </div>
-        <label>Person
-          <select id="moneyPerson"></select>
-        </label>
+        <div class="grid2" id="moneyGrid">
+          <label id="moneyPersonField">Person
+            <select id="moneyPerson"></select>
+          </label>
+          <label id="moneyFromField"><span id="moneyFromLabel">From</span>
+            <select id="moneyFrom"></select>
+          </label>
+        </div>
       </div>
 
       <div class="field" id="categoryField">
@@ -499,7 +571,7 @@
   <dialog id="goalDialog">
     <form method="dialog" id="goalForm" novalidate>
       <h2>Savings goal</h2>
-      <p class="muted">Investments (401(K), India, USA...) count toward the goal, split equally: each of you aims for half. Rolling savings stay separate.</p>
+      <p class="muted">Investments (401(K), India, USA...) count toward the goal, split equally: each of you aims for half. Surplus counts once you invest it.</p>
       <div class="grid2">
         <label>Target ($)
           <div class="amount">
@@ -535,24 +607,76 @@
     </form>
   </dialog>
 
-  <dialog id="loanDialog">
-    <form method="dialog" id="loanForm" novalidate>
-      <h2>Loan balance</h2>
-      <p class="muted">What is still owed on V's loan as of a date. Loan payments logged after that date count it down. Enter it again any time to correct it.</p>
-      <div class="grid2">
-        <label>Balance ($)
-          <div class="amount">
-            <span>$</span>
-            <input type="text" id="loanBalance" inputmode="decimal" placeholder="0.00">
-          </div>
-        </label>
-        <label>As of
-          <input type="date" id="loanDate">
-        </label>
-      </div>
+  <dialog id="targetDialog">
+    <form method="dialog" id="targetForm" novalidate>
+      <h2>Savings target</h2>
+      <p class="muted">The share of each month's income to keep (investments plus savings). Safe to spend = expected income minus this share minus what is already spent, loan payments included.</p>
+      <label>Save each month (%)
+        <input type="text" id="targetPct" inputmode="decimal" placeholder="70">
+      </label>
+      <p id="targetHint" class="muted"></p>
       <div class="row end">
         <button value="cancel" formnovalidate>Cancel</button>
         <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="recapDialog">
+    <form method="dialog" id="recapForm" novalidate>
+      <h2>Weekly email</h2>
+      <p class="muted">Sent every Sunday evening from your Google account. Addresses are kept in the sheet's script settings, not in the app.</p>
+      <label>Send to
+        <input type="text" id="recapTo" placeholder="you@gmail.com, partner@gmail.com" autocomplete="off" autocapitalize="off">
+      </label>
+      <label class="check">
+        <input type="checkbox" id="recapOn">
+        <span>Send the weekly email</span>
+      </label>
+      <div class="row end">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="test">Save + send test</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="paydayDialog">
+    <form method="dialog" id="paydayForm" novalidate>
+      <h2 id="paydayTitle">Payday plan</h2>
+      <p id="paydayIntro" class="muted"></p>
+      <div class="grid2">
+        <label>Invest ($)
+          <div class="amount">
+            <span>$</span>
+            <input type="text" id="payInvest" inputmode="decimal">
+          </div>
+        </label>
+        <label>Into
+          <select id="payWhere">
+            <option>India</option>
+            <option>USA</option>
+            <option>401(K)</option>
+            <option>Other</option>
+          </select>
+        </label>
+      </div>
+      <div class="grid2" id="payLoanRow">
+        <label>Loan payment ($)
+          <div class="amount">
+            <span>$</span>
+            <input type="text" id="payLoan" inputmode="decimal">
+          </div>
+        </label>
+        <label>Loan
+          <input type="text" id="payLoanName" list="loanNames" autocapitalize="words" autocomplete="off">
+          <datalist id="loanNames"></datalist>
+        </label>
+      </div>
+      <p id="paydayKeep" class="settle-owed"></p>
+      <div class="row end">
+        <button value="cancel" formnovalidate>Skip</button>
+        <button value="save" class="primary">Log these</button>
       </div>
     </form>
   </dialog>

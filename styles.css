@@ -49,6 +49,30 @@ header {
   padding: 12px 16px 4px;
 }
 h1 { margin: 0; font-size: 26px; color: var(--accent); letter-spacing: 0.5px; }
+.nav { position: relative; margin-left: auto; margin-right: 4px; }
+.nav-btn { min-height: 40px; padding: 6px 14px; border-radius: 999px; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.nav-btn .caret { font-size: 12px; color: var(--muted); }
+.nav-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; list-style: none; margin: 0; padding: 6px; min-width: 170px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18); }
+.nav-menu button { width: 100%; text-align: left; border: none; background: none; min-height: 44px; padding: 8px 12px; border-radius: 8px; font-size: 16px; font-weight: 600; }
+.nav-menu button[aria-current="page"] { background: var(--accent-soft); color: var(--text); }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.tile { display: grid; gap: 2px; text-align: left; padding: 12px; min-height: 92px; border-radius: 14px; background: var(--card); border: 1px solid var(--border);
+  border-left: 5px solid var(--tile, var(--border)); align-content: start; font-weight: 400; }
+.tile .t-label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.tile .t-value { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.tile .t-sub { font-size: 12.5px; color: var(--muted); line-height: 1.3; }
+.tile.neg .t-value { color: var(--err); }
+.tile.good .t-value { color: var(--pos); }
+.loan-item { padding: 12px 0; border-top: 1px solid var(--border); }
+.loan-item:first-child { border-top: none; padding-top: 4px; }
+.loan-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.loan-head .name { font-weight: 800; }
+.loan-head .bal { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.loan-item .meter { margin: 6px 0; }
+.loan-item .meter-fill:not(.warn):not(.over) { background: #f87171; }
+.loan-actions { display: flex; gap: 8px; margin-top: 8px; }
+.loan-actions button { flex: 1; min-height: 38px; font-size: 14px; }
 h2 { margin: 0; font-size: 17px; }
 
 main { max-width: 480px; margin: 0 auto; padding: 8px 16px 32px; }
@@ -267,6 +291,7 @@ input.invalid { border-color: var(--err); }
 .suggest { margin: 8px 0 0; padding-left: 18px; font-size: 14px; }
 .suggest li { margin: 4px 0; }
 .money-chips input:checked + label { background: #d8b4fe; border-color: #9333ea; }
+.c-surplus { --row: #fef08a; }
 .c-income { --row: #bbf7d0; }
 .c-invest { --row: #e9d5ff; }
 .c-loan { --row: #fecaca; }
