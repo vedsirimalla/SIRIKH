@@ -75,7 +75,7 @@ Open **Funds** from the menu. It tracks what comes in and what goes out, apart f
 | 401(K) | What the employer took from that paycheck before pay. Starts at the last amount logged for that person; change it when the contribution changes | V or K |
 | Invest | Money you put away from pay: India, USA, Other. **From:** this month's income, or Savings (money kept in earlier months) | V or K |
 | Loan | What you sent toward a loan. Pick the loan (buttons appear after the first payment) or name a new one | V, K, or Both (half each) |
-| Savings | Spending from savings kept in earlier months, with what it was for | V, K or Both |
+| Savings | Spending from savings kept in earlier months, with what it was for | V or K only (savings are individual: V's from V's income, K's from K's) |
 
 Log each paycheck as it arrives (V 3,138.18 and K 2,958.70 at the moment). Salary comes every two weeks; each paycheck counts in the month of its date, so two October paychecks both count in October (three when a month has three paydays). The Date field can be changed to log a paycheck or expense on the day it really happened.
 

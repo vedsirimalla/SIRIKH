@@ -52,7 +52,7 @@ const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
   'October', 'November', 'December'];
 const MONTH_TAB_RE = /^Sirikh (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 21;
+const BACKEND_VERSION = 22;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget', 'Settlement'];
@@ -1291,12 +1291,14 @@ function carState_(sheet) {
 //   Date | Kind | Category | Amount ($) | Person | Notes | ID | From
 //
 // Kind:
-//   Income            money in hand (after 401(K), insurance, taxes). Person V, K or Both (half each)
+//   Income            money in hand (after 401(K), insurance, taxes). Person V or K; Both = shared income
+//                     such as profit from something run together (half each)
 //   401(K)            taken by the employer before pay; logged per paycheck. Person V or K. Not part
 //                     of income, spending or savings (it never reaches the bank); counts toward the goal
 //   Investment        401(K), India, USA... Person V or K. From: Income (this month) or Savings
 //   Loan payment      a payment sent toward a loan; Category = which loan. Person V, K or Both
-//   Use savings       spending from savings kept in earlier months. Person V, K or Both
+//   Use savings       spending from savings kept in earlier months. Person V or K only: savings are
+//                     individual (V's from V's income, K's from K's income), never pooled
 //   Prior investment  invested before tracking (counts toward the goal)
 //   Goal              Amount = target, Category = deadline month (yyyy-mm)
 //   Savings target    Amount = percent of income to keep (invested + saved) each month
@@ -1367,7 +1369,7 @@ function validateFunds_(b) {
   if (kind === 'Savings target' && amount > 95) throw new Error('Savings target is a percent of income (0 to 95).');
   let person = String(b.person || '').trim();
   if (person === 'Joint') person = 'Both';
-  const allowed = { 'Income': ['V', 'K', 'Both'], '401(K)': ['V', 'K'], 'Investment': ['V', 'K'], 'Loan payment': ['V', 'K', 'Both'], 'Use savings': ['V', 'K', 'Both'],
+  const allowed = { 'Income': ['V', 'K', 'Both'], '401(K)': ['V', 'K'], 'Investment': ['V', 'K'], 'Loan payment': ['V', 'K', 'Both'], 'Use savings': ['V', 'K'],
     'Prior investment': ['V', 'K'] }[kind];
   if (allowed && allowed.indexOf(person) === -1) throw new Error('Person must be ' + allowed.join(', ').replace(/, ([^,]*)$/, ' or $1') + '.');
   if (!allowed) person = 'Both';

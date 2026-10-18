@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 23; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 24; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
@@ -1413,14 +1413,14 @@
     'Investment': { label: 'Where', chips: () => ['India', 'USA', 'Other'], persons: ['V', 'K'], fromLabel: 'From',
       from: [['Income', "This month's income"], ['Savings', 'Savings']], otherHint: 'Brokerage, HSA...' },
     'Loan payment': { label: 'Loan', chips: () => loanNames().concat(['Other']), persons: ['V', 'K', 'Both'], otherHint: 'Which loan (V education...)' },
-    'Use savings': { label: 'What for', chips: null, persons: ['V', 'K', 'Both'], otherHint: 'Flight to India, laptop...' },
+    'Use savings': { label: 'What for', chips: null, persons: ['V', 'K'], otherHint: 'Flight to India, laptop...' },
   };
   const MONEY_HINTS = {
-    'Income': 'Income: in hand after 401(K), insurance and taxes (salary, tax refund, bonus). Both splits it half each.',
+    'Income': "Income: in hand after 401(K), insurance and taxes (salary, tax refund, bonus). Pick V or K for salaries; Both is for shared income, like profit from something you run together (half each).",
     '401(K)': '401(K): what the employer took from this paycheck before pay. Not part of income or savings; counts toward the goal. Starts at the last amount; change it when the contribution changes.',
     'Investment': 'Invest: money you put away from pay (India, USA...). Counts toward the goal. From savings moves money kept in earlier months.',
     'Loan payment': 'Loan: what you sent toward a loan. Counts as spending for the month. Both splits it half each.',
-    'Use savings': 'Savings: spend from savings kept in earlier months. Leaves this month alone.',
+    'Use savings': "Savings: spend from your own savings kept in earlier months (V's or K's, never shared). Leaves this month alone.",
   };
   const KIND_TAGS = { 'Income': 'Income', '401(K)': '401(K)', 'Investment': 'Invested', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
     'Use surplus': 'Savings used', 'Prior investment': 'Invested before', 'Goal': 'Goal', 'Savings target': 'Savings target' };
