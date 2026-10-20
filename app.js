@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 24; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 25; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
@@ -27,6 +27,7 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
+    if (op.op === 'update') return 23; // editing an entry
     if (op.table === 'funds') return op.op === 'add' && op.entry.kind === '401(K)' ? 21 : 20;
     if (op.table === 'car') return op.op !== 'add' ? 9 : op.entry.category === 'Settlement' ? 18 : 15;
     if (op.op !== 'add') return 0;
@@ -58,6 +59,10 @@
   const getQueue = () => store.get('queue', []);
   const setQueue = (q) => store.set('queue', q);
   const getState = () => store.get('state', null);
+  // An edit waits in the queue as one 'update'. For the live numbers it counts as taking the old
+  // entry out and putting the new one in.
+  const pendingOps = () => getQueue().flatMap((op) => (op.op === 'update' ? [{ ...op, op: 'delete', id: op.entry.id }, { ...op, op: 'add' }] : [op]));
+  let editing = null; // the Recent entry being edited: { id, table }
 
   // ---------- Helpers
   function today() {
@@ -171,8 +176,7 @@
       }
     };
 
-    const queue = getQueue();
-    for (const op of queue) {
+    for (const op of pendingOps()) {
       if (op.table) continue; // Sonata and Funds have their own numbers
       if (op.op === 'add') {
         if (!sameMonth(op.entry)) continue;
@@ -185,7 +189,7 @@
     }
     for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'personal', 'kOnK', 'kOnV', 'vOnV', 'vOnK', 'settled', 'settledNet']) p[k] = round2(p[k] || 0);
     const balance = hasBalance ? round2(p.start + p.added - p.spent) : 0;
-    return { balance, hasBalance, unsynced: queue.length, period: p };
+    return { balance, hasBalance, unsynced: getQueue().length, period: p };
   }
 
   // Which budgets the start-of-month prompt asks for.
@@ -196,7 +200,7 @@
       ? { ...fresh.needsBudget }
       : { joint: true, V: !!(st && st.personalBudgets && st.personalBudgets.V), K: !!(st && st.personalBudgets && st.personalBudgets.K) };
     // Budgets set on this phone but not synced yet.
-    for (const op of getQueue()) {
+    for (const op of pendingOps()) {
       if (op.op !== 'add' || op.table || String(op.entry.date).slice(0, 7) !== currentMonth()) continue;
       if (op.entry.type === 'Set balance') need.joint = false;
       if (op.entry.type === 'Personal budget') need[op.entry.expenseFor] = false;
@@ -353,6 +357,7 @@
     if (el) el.checked = true;
   }
   function setView(v) {
+    if (editing) cancelEdit();
     view = VIEWS.includes(v) ? v : 'Home';
     store.set('view', view);
     restoreType(view === 'Home' ? store.get('quickType', 'Joint') : view);
@@ -384,7 +389,7 @@
     if (isMoneyMode()) return renderMoneyRecent();
     const state = getState();
     const isCar = isCarMode();
-    const queue = getQueue().filter((op) => (op.table || 'main') === (isCar ? 'car' : 'main'));
+    const queue = pendingOps().filter((op) => (op.table || 'main') === (isCar ? 'car' : 'main'));
     const deleting = new Set(queue.filter((op) => op.op === 'delete').map((op) => op.id));
     const pending = queue.filter((op) => op.op === 'add').map((op) => ({ ...op.entry, pending: true })).reverse();
     const source = state ? (isCar ? (state.car && state.car.recent) || [] : state.recent || []) : [];
@@ -401,7 +406,8 @@
     }
     for (const r of rows) {
       const li = document.createElement('li');
-      li.className = [isCar && r.category !== 'Settlement' ? 'c-car' : colorClass(r), r.pending ? 'pending' : ''].filter(Boolean).join(' ');
+      li.className = [isCar && r.category !== 'Settlement' ? 'c-car' : colorClass(r), r.pending ? 'pending' : '',
+        editing && editing.id === r.id ? 'editing' : ''].filter(Boolean).join(' ');
 
       const body = document.createElement('div');
       body.className = 'body';
@@ -411,6 +417,9 @@
       name.textContent = isCar ? r.vendor || r.category : r.category;
       const amt = document.createElement('span');
       amt.textContent = (r.type === 'Add funds' ? '+' : '') + money(r.amount);
+      const isSettlement = r.type === 'Settlement' || r.category === 'Settlement';
+      const refundRow = r.amount < 0 && !isSettlement && (isCar || ['Joint', 'Fixed', 'Personal'].includes(r.type));
+      if (refundRow) amt.className = 'refund-amt';
       top.append(name, amt);
 
       const sub = document.createElement('div');
@@ -420,7 +429,7 @@
       tag.textContent = isCar ? r.category : TYPE_LABELS[r.type] || r.type || 'Joint';
       const owner = r.expenseFor && r.expenseFor !== 'Both' ? r.expenseFor : '';
       const parts = [prettyDate(r.date)];
-      const isSettlement = r.type === 'Settlement' || r.category === 'Settlement';
+      if (refundRow) parts.push('refund');
       if (isSettlement) parts.push(`${r.paidBy} paid ${r.paidBy === 'V' ? 'K' : 'V'}`);
       else if (isCar && r.expenseFor === 'Joint') parts.push('Joint');
       else if (owner && (r.type === 'Personal' || (isCar && owner !== r.paidBy))) parts.push(`for ${owner}`);
@@ -440,6 +449,8 @@
       body.append(top, sub);
       li.appendChild(body);
 
+      const editable = isCar ? !isSettlement : ['Joint', 'Fixed', 'Personal'].includes(r.type);
+      if (r.id && editable) li.appendChild(editButton(r, isCar ? 'car' : '', name.textContent));
       if (r.id) {
         const del = document.createElement('button');
         del.type = 'button';
@@ -497,7 +508,7 @@
     // A personal budget covers a calendar month: every Personal expense for that person dated in
     // that month counts, whoever's card paid, even one logged before the budget was set.
     const inMonth = (b, date) => b && String(date).slice(0, 7) === b.month;
-    for (const op of getQueue()) {
+    for (const op of pendingOps()) {
       if (op.table) continue;
       if (op.op === 'add' && op.entry.type === 'Personal budget') {
         const month = op.entry.date.slice(0, 7);
@@ -567,11 +578,9 @@
     if (settleTable === 'car') {
       const c = (getState() || {}).car || {};
       let r = c.remaining !== undefined ? c.remaining : c.owed || 0;
-      for (const op of getQueue()) {
-        if (op.table !== 'car' || op.op !== 'add') continue;
-        const e = op.entry;
-        if (e.category === 'Settlement') r -= e.paidBy === 'K' ? e.amount : -e.amount;
-        else r += carOwed(e.expenseFor || e.paidBy, e.paidBy, e.amount);
+      for (const { e, sign } of carChanges()) {
+        if (e.category === 'Settlement') r -= sign * (e.paidBy === 'K' ? e.amount : -e.amount);
+        else r += sign * carOwed(e.expenseFor || e.paidBy, e.paidBy, e.amount);
       }
       return round2(r);
     }
@@ -582,7 +591,7 @@
     }
     const u = (((getState() || {}).unsettled) || []).find((x) => x.month === month);
     let r = u ? u.remaining : 0;
-    for (const op of getQueue()) {
+    for (const op of pendingOps()) {
       if (op.op === 'add' && !op.table && op.entry.type === 'Settlement' && op.entry.month === month) {
         r -= op.entry.paidBy === 'K' ? op.entry.amount : -op.entry.amount;
       }
@@ -719,6 +728,13 @@
   const num = (n, digits = 0) => Number(n).toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
   const per = (n) => '$' + Number(n).toFixed(3);
 
+  // Sonata changes not synced yet, each with +1 (added) or -1 (deleted, or the old side of an edit).
+  function carChanges() {
+    const recent = ((getState() || {}).car || {}).recent || [];
+    return pendingOps().filter((op) => op.table === 'car').map((op) => (op.op === 'add'
+      ? { e: op.entry, sign: 1 } : { e: recent.find((r) => r.id === op.id), sign: -1 })).filter((x) => x.e);
+  }
+
   // Highest odometer known, including fill-ups still waiting to sync.
   function lastOdometer() {
     const st = getState();
@@ -786,19 +802,18 @@
     let settledNet = c ? c.settledNet || 0 : 0;
     let settled = c ? c.settled || 0 : 0;
     const turns = { V: 0, K: 0, Joint: 0, ...((c && c.turns) || {}) };
-    for (const op of getQueue()) {
-      if (op.table !== 'car' || op.op !== 'add') continue;
-      const e = op.entry;
+    for (const { e, sign } of carChanges()) {
+      const amt = sign * e.amount;
       if (e.category === 'Settlement') {
-        settled += e.amount;
-        settledNet += e.paidBy === 'K' ? e.amount : -e.amount;
+        settled += amt;
+        settledNet += e.paidBy === 'K' ? amt : -amt;
         continue;
       }
-      if (e.paidBy === 'V') v += e.amount;
-      if (e.paidBy === 'K') k += e.amount;
+      if (e.paidBy === 'V') v += amt;
+      if (e.paidBy === 'K') k += amt;
       const owner = e.expenseFor || e.paidBy;
-      owed += carOwed(owner, e.paidBy, e.amount);
-      if (e.category === 'Fuel' && turns[owner] !== undefined) turns[owner]++;
+      owed += carOwed(owner, e.paidBy, amt);
+      if (e.category === 'Fuel' && turns[owner] !== undefined) turns[owner] += sign;
     }
     owed = round2(owed);
     $('carPaidV').textContent = money(round2(v));
@@ -1002,16 +1017,16 @@
       let sent = false;
       for (let op = nextOp(); op; op = nextOp()) {
         try {
-          const data = await call(op.op === 'add'
-            ? { action: 'add', table: op.table, entry: op.entry }
-            : { action: 'delete', table: op.table, id: op.id });
+          const data = await call(op.op === 'delete'
+            ? { action: 'delete', table: op.table, id: op.id }
+            : { action: op.op, table: op.table, entry: op.entry });
           saveState(data);
           sent = true;
         } catch (err) {
           if (err.kind !== 'server') throw err;
           // The sheet refused this change (bad data); drop it so it does not block the rest.
           rejected = true;
-          const what = op.op === 'add' ? `${op.entry.category || op.entry.kind} ${money(op.entry.amount)}` : 'delete';
+          const what = op.op === 'delete' ? 'delete' : `${op.op === 'update' ? 'edit of ' : ''}${op.entry.category || op.entry.kind} ${money(op.entry.amount)}`;
           showBanner(`Not saved (${what}): ${err.message}`, 'err', true);
         }
         setQueue(getQueue().filter((o) => o.opId !== op.opId));
@@ -1071,7 +1086,7 @@
     $('payGrid').hidden = moneyType;
     $('owedHint').hidden = true;
     $('categoryLabel').textContent = fixed ? 'Fixed bill' : 'Category';
-    $('saveBtn').textContent = car ? 'Save car expense' : moneyType ? 'Save to Funds' : 'Save expense';
+    $('saveBtn').textContent = editing ? 'Save changes' : car ? 'Save car expense' : moneyType ? 'Save to Funds' : 'Save expense';
     if (moneyType) setupMoneyFields();
     setupExpenseFor(type);
     updateCarFields();
@@ -1114,15 +1129,20 @@
     const card = $('paidBy').value;
     const hint = $('owedHint');
     const amount = parseAmount($('amount').value);
+    const refund = isRefund();
+    const amt = amount === null ? null : Math.abs(amount);
     if (owner === 'Joint') {
       const other = card === 'V' ? 'K' : 'V';
-      hint.textContent = `Joint, split 50/50: ${other} owes ${card} half` + (amount ? ` (${money(amount / 2)}).` : '.');
+      hint.textContent = refund
+        ? `Joint refund back on ${card}'s card: ${other} owes ${card} half of it less` + (amt ? ` (${money(amt / 2)}).` : '.')
+        : `Joint, split 50/50: ${other} owes ${card} half` + (amt ? ` (${money(amt / 2)}).` : '.');
       hint.hidden = false;
       return;
     }
     if ((owner !== 'V' && owner !== 'K') || owner === card || isMoneyMode()) { hint.hidden = true; return; }
-    hint.textContent = `${owner}'s expense on ${card}'s card: ${owner} owes ${card} the full ` +
-      (amount ? money(amount) : 'amount') + '.';
+    hint.textContent = refund
+      ? `${owner}'s refund back on ${card}'s card: ${owner} owes ${card} ` + (amt ? money(amt) : 'that much') + ' less.'
+      : `${owner}'s expense on ${card}'s card: ${owner} owes ${card} the full ` + (amt ? money(amt) : 'amount') + '.';
     hint.hidden = false;
   }
   $('expenseFor').addEventListener('change', () => {
@@ -1138,6 +1158,18 @@
   });
   $('amount').addEventListener('input', updateOwedHint);
 
+  // Refund: money back on a card. Saved as a negative amount, so it undoes the expense everywhere
+  // (budget, spending, who owes whom). Not for Funds or fuel fill-ups.
+  function updateRefundField() {
+    const type = selectedType();
+    $('refundField').hidden = type === 'Funds' || (type === 'Car' && selectedCarCat() === 'Fuel');
+  }
+  function isRefund() { return !$('refundField').hidden && $('isRefund').checked; }
+  $('isRefund').addEventListener('change', () => {
+    $('amountLabel').textContent = isRefund() ? 'Refund amount ($)' : 'Amount ($)';
+    updateOwedHint();
+  });
+
   function selectedCarCat() {
     const checked = document.querySelector('input[name="carCat"]:checked');
     return checked ? checked.value : 'Fuel';
@@ -1148,6 +1180,7 @@
   function updateCarFields() {
     const fuel = selectedCarCat() === 'Fuel';
     $('fuelFields').hidden = !fuel;
+    updateRefundField();
     $('vendorLabel').textContent = fuel ? 'Gas station' : 'Vendor or description';
     $('vendor').placeholder = fuel ? 'Shell, Costco…' : 'Hyundai dealer, oil change…';
     updateFuelPreview();
@@ -1249,17 +1282,19 @@
       return markInvalid($('gallons'), `That is more than the ${TANK_GALLONS} gal tank holds.`);
     }
     const last = lastOdometer();
-    if (fuel && odometer !== '' && last && odometer <= last) {
+    // An edited fill-up may be an older one, so only new fill-ups must be above the last reading.
+    if (fuel && odometer !== '' && last && odometer <= last && !editing) {
       return markInvalid($('odometer'), `Odometer should be above the last fill-up (${num(last)} mi).`);
     }
     let amount = parseAmount($('amount').value);
     if ((amount === null || amount === 0) && gallons && ppg) amount = round2(gallons * ppg);
     if (amount === null || amount === 0) return markInvalid($('amount'), 'Enter the amount.');
+    if (isRefund()) amount = -Math.abs(amount);
     const partial = fuel && $('fillPartial').checked;
     const missedBefore = fuel && $('missedBefore').checked;
     const open = openStretch();
     let tankMpg = 0;
-    if (fuel && !partial && !missedBefore && open && open.known && odometer !== '' && gallons) {
+    if (fuel && !partial && !missedBefore && open && open.known && odometer !== '' && gallons && !editing) {
       tankMpg = (odometer - open.startOdo) / (open.gallons + gallons);
     }
     const entry = {
@@ -1269,7 +1304,7 @@
       fill: fuel ? (partial ? 'Partial' : 'Full') : '',
       missedBefore,
     };
-    enqueue({ op: 'add', table: 'car', entry });
+    const edited = queueSave('car', entry);
     store.set('paidBy', entry.paidBy);
 
     $('expenseForm').reset();
@@ -1284,9 +1319,9 @@
     const status = await sync();
     $('saveBtn').disabled = false;
     const owes = round2(carOwed(entry.expenseFor, entry.paidBy, amount));
-    report(status, `Saved ✓ ${category} ${money(amount)}` +
+    report(status, `${edited ? 'Updated' : amount < 0 ? 'Refund saved' : 'Saved'} ✓ ${category} ${money(amount)}` +
       (partial ? ' · partial, MPG comes with the next full fill' : tankMpg > 0 ? ` · ${tankMpg.toFixed(1)} MPG` : '') +
-      (owes ? ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}` : ''));
+      owesText(owes, amount < 0));
   }
 
   $('expenseForm').addEventListener('submit', async (e) => {
@@ -1315,13 +1350,13 @@
       id: uuid(),
       date,
       category,
-      amount,
+      amount: isRefund() ? -Math.abs(amount) : amount,
       paidBy: $('paidBy').value,
       notes: $('notes').value.trim(),
       type,
       expenseFor: type === 'Personal' ? selectedFor() : '',
     };
-    enqueue({ op: 'add', entry });
+    const edited = queueSave('', entry);
     store.set('paidBy', entry.paidBy);
 
     $('expenseForm').reset();
@@ -1336,12 +1371,12 @@
     const status = await sync();
     $('saveBtn').disabled = false;
     const left = estimate();
-    const owes = owedInFull(entry.expenseFor, entry.paidBy, amount);
+    const owes = owedInFull(entry.expenseFor, entry.paidBy, entry.amount);
     const pb = entry.type === 'Personal' ? estimatePersonal()[entry.expenseFor] : null;
-    report(status, `Saved ✓ ${category} ${money(amount)}` +
+    report(status, `${edited ? 'Updated' : entry.amount < 0 ? 'Refund saved' : 'Saved'} ✓ ${category} ${money(entry.amount)}` +
       (entry.type === 'Fixed' ? ' · Fixed bill' : '') +
       (pb ? ` · ${entry.expenseFor} personal: ${pb.remaining < 0 ? money(-pb.remaining) + ' over' : money(pb.remaining) + ' left'}` : '') +
-      (owes ? ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}` : '') +
+      owesText(owes, entry.amount < 0) +
       (entry.type === 'Joint' && left.hasBalance
         ? left.balance < 0 ? ` · ${money(-left.balance)} over budget` : ` · ${money(left.balance)} left`
         : ''));
@@ -1354,6 +1389,7 @@
     if (!confirm(`Delete "${name}" ${money(item.amount)} from ${prettyDate(item.date)}?`)) return;
     const queue = getQueue();
     const queued = queue.find((op) => op.op === 'add' && op.entry.id === item.id);
+    if (editing && editing.id === item.id) cancelEdit();
     if (queued) {
       // Not sent yet: just drop it from this phone.
       setQueue(queue.filter((op) => op !== queued));
@@ -1361,10 +1397,120 @@
       showBanner('Removed.', 'ok');
       return;
     }
+    // An edit waiting to sync is dropped; the delete replaces it.
+    setQueue(queue.filter((op) => !(op.op === 'update' && op.entry.id === item.id)));
     enqueue(table ? { op: 'delete', table, id: item.id } : { op: 'delete', id: item.id });
     const status = await sync();
     if (status === 'ok') showBanner('Deleted ✓', 'ok');
     if (status === 'offline') showBanner('Will delete when you are back online.', 'warn');
+  }
+
+  // " · K owes V $20.00" for one entry. A refund (negative amount) lowers what is owed instead:
+  // " · K owes V $10.00 less".
+  const owesText = (owes, refund) => (!owes ? ''
+    : refund ? ` · ${owes < 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))} less`
+      : ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}`);
+
+  // ---------- Edit from Recent: the form fills with the entry; saving writes over it (same id).
+  const MONEY_EDITABLE = ['Income', '401(K)', 'Investment', 'Loan payment', 'Use savings', 'Use surplus', 'Goal'];
+  function editButton(r, table, name) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'edit';
+    b.setAttribute('aria-label', `Edit ${name}`);
+    b.textContent = '✎';
+    b.addEventListener('click', () => startEdit(r, table, name));
+    return b;
+  }
+
+  // Saves a new entry, or the one being edited. An edit of something not synced yet just replaces
+  // it on this phone. Returns true for an edit.
+  function queueSave(table, entry) {
+    const extra = table ? { table } : {};
+    if (!editing) { enqueue({ op: 'add', ...extra, entry }); return false; }
+    entry.id = editing.id;
+    const q = getQueue();
+    const waiting = q.find((op) => (op.op === 'add' || op.op === 'update') && op.entry && op.entry.id === entry.id);
+    stopEdit();
+    if (waiting) { waiting.entry = entry; setQueue(q); render(); } else enqueue({ op: 'update', ...extra, entry });
+    return true;
+  }
+
+  function stopEdit() {
+    editing = null;
+    $('editBar').hidden = true;
+  }
+  function cancelEdit() {
+    stopEdit();
+    $('expenseForm').reset();
+    clearInvalid($('expenseForm'));
+    amountTyped = false;
+    $('date').value = today();
+    $('paidBy').value = store.get('paidBy', 'V');
+    $('amountLabel').textContent = 'Amount ($)';
+    restoreType(view === 'Home' ? store.get('quickType', 'Joint') : view);
+    updateTypeHint();
+  }
+  $('editCancel').addEventListener('click', cancelEdit);
+  // A cleared form always starts as a normal amount, not a refund.
+  $('expenseForm').addEventListener('reset', () => { $('amountLabel').textContent = 'Amount ($)'; });
+
+  function startEdit(r, table, name) {
+    if (table === 'funds' && r.kind === 'Goal') return $('goalBtn').click();
+    const type = table === 'car' ? 'Car' : table === 'funds' ? 'Funds' : r.type;
+    setView(type);
+    editing = { id: r.id, table };
+    const form = $('expenseForm');
+    form.reset();
+    clearInvalid(form);
+    restoreType(type);
+    const pick = (name, value) => { const x = document.querySelector(`input[name="${name}"][value="${value}"]`); if (x) x.checked = true; return x; };
+    const text = (v) => (v === '' || v === undefined || v === null ? '' : String(v));
+    if (table === 'funds') {
+      const kind = r.kind === 'Use surplus' ? 'Use savings' : r.kind;
+      pick('moneyKind', kind);
+      updateTypeHint();
+      $('moneyPerson').value = r.person;
+      if (kind === 'Investment') $('moneyFrom').value = r.from === 'Savings' || r.from === 'Surplus' ? 'Savings' : 'Income';
+      const chips = [...document.querySelectorAll('input[name="moneyCat"]')];
+      const chip = chips.find((c) => c.value.toLowerCase() === String(r.category).toLowerCase()) || chips.find((c) => c.value === 'Other');
+      if (chip) chip.checked = true;
+      if (!chip || chip.value === 'Other') $('moneyOther').value = r.category || '';
+      updateMoneyOther();
+      k401Prefilled = false;
+    } else if (table === 'car') {
+      pick('carCat', r.category);
+      updateTypeHint();
+      $('vendor').value = r.vendor || '';
+      $('odometer').value = text(r.odometer);
+      $('rangeLeft').value = text(r.rangeLeft);
+      $('gallons').value = text(r.gallons);
+      $('ppg').value = text(r.ppg);
+      $(r.fill === 'Partial' ? 'fillPartial' : 'fillFull').checked = true;
+      $('missedBefore').checked = !!r.missedBefore;
+      $('paidBy').value = r.paidBy;
+      $('expenseFor').value = r.expenseFor || r.paidBy;
+      lastCard = r.paidBy;
+      amountTyped = true;
+    } else {
+      updateTypeHint();
+      if (type === 'Fixed') pick('fixedCat', r.category);
+      else $('category').value = r.category;
+      $('paidBy').value = r.paidBy;
+      if (type === 'Personal') $('expenseFor').value = r.expenseFor || r.paidBy;
+    }
+    $('date').value = r.date;
+    $('amount').value = Math.abs(r.amount).toFixed(2);
+    $('isRefund').checked = r.amount < 0 && table !== 'funds';
+    $('amountLabel').textContent = isRefund() ? 'Refund amount ($)' : 'Amount ($)';
+    $('notes').value = r.notes || '';
+    updateOwedHint();
+    updateFuelPreview();
+    $('editText').textContent = `Editing ${name} ${money(r.amount)} from ${prettyDate(r.date)}`;
+    $('editBar').hidden = false;
+    $('saveBtn').textContent = 'Save changes';
+    render();
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // ---------- Set monthly budget
@@ -1525,7 +1671,7 @@
     if (kind === 'Loan payment' && !category) return markInvalid($('moneyOther'), 'Which loan is this for?');
     const entry = { id: uuid(), date, kind, category, amount, person: $('moneyPerson').value, notes: $('notes').value.trim() };
     if (kind === 'Investment') entry.from = $('moneyFrom').value;
-    enqueue({ op: 'add', table: 'funds', entry });
+    const edited = queueSave('funds', entry);
 
     const keepFrom = $('moneyFrom').value;
     $('expenseForm').reset();
@@ -1548,9 +1694,9 @@
     if (kind === 'Use savings' || entry.from === 'Savings') extra = ` · ${money(f.available.total)} savings from earlier left`;
     if ((kind === 'Investment' || kind === '401(K)') && f.goal) extra += ` · goal ${f.goal.percent}% done`;
     if (kind === '401(K)') extra += ` · ${money(f.now.k401.total)} 401(K) this month`;
-    if (String(date).slice(0, 7) === currentMonth()) extra += f.safe ? ` · ${money(f.safe.left.total)} safe to spend` : ` · ${money(f.now.savings.total)} savings this month`;
-    report(status, `Saved ✓ ${category || KIND_TAGS[kind]} ${money(amount)}${extra}`);
-    if (kind === 'Income' && category === 'Salary' && (entry.person === 'V' || entry.person === 'K') && status !== 'outdated') openPayday(entry);
+    if (String(date).slice(0, 7) === currentMonth()) extra += ` · ${money(f.now.savings.total)} savings this month`;
+    report(status, `${edited ? 'Updated' : 'Saved'} ✓ ${category || KIND_TAGS[kind]} ${money(amount)}${extra}`);
+    if (!edited && kind === 'Income' && category === 'Salary' && (entry.person === 'V' || entry.person === 'K') && status !== 'outdated') openPayday(entry);
   }
 
   // ---- Live estimate: what the sheet last reported plus every change not synced yet
@@ -1577,7 +1723,7 @@
       // Nothing synced for this month yet (or a new month began): last month's savings carry forward.
       const prev = base && base.now;
       f = { month, now: blankNow(month), history: base ? base.history || [] : [], goal: base ? base.goal : null, loans: base ? base.loans || [] : [],
-        safe: base ? base.safe : null, savingsTarget: base ? base.savingsTarget : null, recent: base ? base.recent || [] : [],
+        recent: base ? base.recent || [] : [],
         available: prev ? { ...prev.savedAfter } : trio(), loanUsual: base ? base.loanUsual : trio(), recap: base ? base.recap : null,
         suggestions: base ? base.suggestions || [] : [], hasEntries: base ? base.hasEntries : false,
         k401Total: base ? base.k401Total : null, k401Last: base ? base.k401Last : null };
@@ -1632,10 +1778,9 @@
         f.goal = f.goal || { invested: trio(), avg: trio(), suggestions: [] };
         Object.assign(f.goal, { target: e.amount, deadline: e.category, deadlineLabel: ymLabel(e.category) });
       }
-      if (e.kind === 'Savings target' && sign > 0) f.savingsTarget = e.amount;
     };
     const lists = { funds: f.recent || [], car: (st.car && st.car.recent) || [], main: st.recent || [] };
-    for (const op of getQueue()) {
+    for (const op of pendingOps()) {
       const e = op.op === 'add' ? op.entry : lists[op.table || 'main'].find((r) => r.id === op.id);
       if (!e) continue;
       const sign = op.op === 'add' ? 1 : -1;
@@ -1665,18 +1810,6 @@
     n.budgets = { jointLeft, personalLeft, fromJoint, fromPersonal,
       rest: r2({ V: n.savings.V - fromJoint.V - fromPersonal.V, K: n.savings.K - fromJoint.K - fromPersonal.K, total: n.savings.total - fromJoint.total - fromPersonal.total }) };
 
-    if (f.savingsTarget !== null && f.savingsTarget !== undefined) {
-      const pct = f.savingsTarget;
-      const prevExp = f.safe && f.safe.expected ? f.safe.expected : trio();
-      const expected = r2({ V: Math.max(n.income.V, prevExp.V), K: Math.max(n.income.K, prevExp.K), total: 0 });
-      expected.total = round2(expected.V + expected.K);
-      const allowance = r2({ V: expected.V * (1 - pct / 100), K: expected.K * (1 - pct / 100), total: expected.total * (1 - pct / 100) });
-      const left = r2({ V: allowance.V - n.spent.V, K: allowance.K - n.spent.K, total: allowance.total - n.spent.total });
-      const days = daysLeftInMonth();
-      const used = allowance.total > 0 ? round2((n.spent.total / allowance.total) * 100) : n.spent.total > 0 ? 100 : 0;
-      f.safe = { percent: pct, expected, allowance, spent: n.spent, left, daysLeft: days, perDay: round2(Math.max(0, left.total) / days), used,
-        status: used > 100 ? 'over' : used >= 80 ? 'warn' : 'ok', estimated: expected.total > n.income.total + 0.005 };
-    }
     if (f.goal) {
       const g = f.goal;
       r2(g.invested);
@@ -1740,26 +1873,6 @@
     const ready = hasFunds();
     const monthWord = monthName(f.month + '-01');
 
-    // Safe to spend
-    const sf = f.safe;
-    $('mSafeBody').hidden = !sf;
-    $('safeBtn').textContent = sf ? `Keeping ${sf.percent}% · change` : 'Set savings target';
-    if (sf) {
-      $('mSafe').textContent = money(Math.abs(sf.left.total));
-      $('mSafe').classList.toggle('neg', sf.left.total < 0);
-      $('mSafeWord').textContent = sf.left.total < 0 ? 'over this month' : 'left this month';
-      const fill = $('mSafeFill');
-      fill.style.width = Math.min(100, sf.used) + '%';
-      fill.className = 'meter-fill' + (sf.status === 'over' ? ' over' : sf.status === 'warn' ? ' warn' : '');
-      fill.parentElement.setAttribute('aria-valuenow', String(Math.round(Math.min(100, sf.used))));
-      $('mSafeV').textContent = money(sf.left.V);
-      $('mSafeK').textContent = money(sf.left.K);
-      $('mSafeDay').textContent = sf.left.total > 0 ? money(sf.perDay) : '—';
-      $('mSafeNote').textContent = `Spent ${money(sf.spent.total)} of ${money(sf.allowance.total)} you can spend in ${monthWord} and still keep ${sf.percent}% of income` +
-        (sf.estimated ? ` (income expected ${money(sf.expected.total)}, from recent months until every paycheck is in)` : '') + '. Loan payments count as spending.';
-    } else {
-      $('mSafeNote').textContent = 'Pick how much of your income to keep each month (invested + savings, say 70%). This shows what you can still spend without dipping into it.';
-    }
 
     // This month
     $('mMonthTitle').textContent = `${monthWord} money`;
@@ -1807,13 +1920,6 @@
       rows.push(['Savings this month', n.savings.V, n.savings.K, n.savings.total, 'total']);
       tableRows($('mFrom'), rows);
     }
-    const sharedAll = round2(n.joint + n.fixed + n.sonataShared);
-    tableRows($('mShared'), [
-      ['Joint spending', n.joint, n.joint / 2, n.joint / 2],
-      ['Fixed bills', n.fixed, n.fixed / 2, n.fixed / 2],
-      ['Sonata (joint)', n.sonataShared, n.sonataShared / 2, n.sonataShared / 2],
-      ['Total shared', sharedAll, sharedAll / 2, sharedAll / 2, 'total'],
-    ]);
 
     // Savings from earlier months
     $('mSurplus').textContent = money(f.available.total);
@@ -1891,13 +1997,13 @@
 
     const rc = f.recap;
     $('mRecapNote').textContent = rc && rc.on ? `Sending to ${rc.to.split(',').join(', ')} every Sunday evening.` :
-      'A short email every Sunday evening: spending vs last month, safe to spend, savings, goal and loan payments.';
+      'A short email every Sunday evening: spending vs last month, savings, goal and loan payments.';
     $('recapBtn').textContent = rc && rc.on ? 'Change weekly email' : 'Set up weekly email';
   }
 
   function renderMoneyRecent() {
     const f = (getState() || {}).funds;
-    const queue = getQueue().filter((op) => op.table === 'funds');
+    const queue = pendingOps().filter((op) => op.table === 'funds');
     const deleting = new Set(queue.filter((op) => op.op === 'delete').map((op) => op.id));
     const pending = queue.filter((op) => op.op === 'add').map((op) => ({ ...op.entry, pending: true })).reverse();
     const rows = [...pending, ...((f && f.recent) || []).filter((r) => !deleting.has(r.id))];
@@ -1905,7 +2011,7 @@
     list.innerHTML = '';
     if (!rows.length) list.appendChild(el('li', 'empty', 'Nothing yet.'));
     for (const r of rows) {
-      const li = el('li', [KIND_CLASS[r.kind] || '', r.pending ? 'pending' : ''].filter(Boolean).join(' '));
+      const li = el('li', [KIND_CLASS[r.kind] || '', r.pending ? 'pending' : '', editing && editing.id === r.id ? 'editing' : ''].filter(Boolean).join(' '));
       const body = el('div', 'body');
       const top = el('div', 'top');
       const title = r.kind === 'Goal' ? `Goal by ${ymLabel(r.category)}` : r.kind === 'Savings target' ? 'Savings target' : r.category || KIND_TAGS[r.kind];
@@ -1918,6 +2024,7 @@
       sub.append(el('span', 'tag', KIND_TAGS[r.kind] || r.kind), document.createTextNode(parts.filter(Boolean).join(' · ')));
       body.append(top, sub);
       li.appendChild(body);
+      if (r.id && MONEY_EDITABLE.includes(r.kind)) li.appendChild(editButton(r, 'funds', title));
       if (r.id) {
         const del = el('button', 'del', '×');
         del.type = 'button';
@@ -1947,28 +2054,16 @@
     const st = getState() || {};
     const monthWord = monthName(currentMonth() + '-01');
 
-    // Hero: safe to spend if a savings target is set, else this month's savings, else the joint budget.
+    // Hero: this month's savings (what is left of income after spending and investing), else the joint budget.
     const meter = $('hHeroMeter');
     meter.hidden = true;
     let label = `${monthWord}`, amt = '—', word = '', note = 'Log income in Funds and set budgets in Joint and Personal to see your month here.', neg = false;
-    if (f.safe && ready) {
-      const sf = f.safe;
-      label = `Safe to spend in ${monthWord}`;
-      amt = money(Math.abs(sf.left.total));
-      neg = sf.left.total < 0;
-      word = neg ? 'over' : 'left';
-      note = neg ? `Spending is past what keeps ${sf.percent}% of income. Hold off on extras until next month.`
-        : `About ${money(sf.perDay)} a day for ${sf.daysLeft} days keeps ${sf.percent}% of income. V ${money(sf.left.V)} · K ${money(sf.left.K)}.`;
-      meter.hidden = false;
-      $('hHeroFill').style.width = Math.min(100, sf.used) + '%';
-      $('hHeroFill').className = 'meter-fill' + (sf.status === 'over' ? ' over' : sf.status === 'warn' ? ' warn' : '');
-      meter.setAttribute('aria-valuenow', String(Math.round(Math.min(100, sf.used))));
-    } else if (ready && f.now.income.total > 0) {
+if (ready && f.now.income.total > 0) {
       label = `Savings in ${monthWord}`;
       amt = money(Math.abs(f.now.savings.total));
       neg = f.now.savings.total < 0;
       word = neg ? 'short' : `so far (${pctText(f.now.rate.total)} kept)`;
-      note = 'Set a savings target in Funds to see how much is safe to spend.';
+      note = `V ${money(f.now.savings.V)} · K ${money(f.now.savings.K)}: what is left of each income after spending and investing.`;
     } else if (e.hasBalance) {
       label = `${monthWord} joint budget`;
       amt = money(Math.abs(e.balance));
@@ -2040,13 +2135,13 @@
     clearInvalid($('goalForm'));
     const g = fundsEstimate().goal;
     $('goalTarget').value = g ? String(g.target) : '150000';
-    $('goalDeadline').value = g ? g.deadline : '2027-07';
+    $('goalDeadline').value = g && /^\d{4}-\d{2}$/.test(String(g.deadline)) ? g.deadline : '2027-07';
     const first = !hasPrior();
     $('priorFields').hidden = !first;
     if (first) { $('priorV').value = PRIOR_DEFAULT.V.toFixed(2); $('priorK').value = PRIOR_DEFAULT.K.toFixed(2); }
     goalDialog.showModal();
   });
-  for (const id of ['goalTarget', 'goalDeadline', 'priorV', 'priorK', 'targetPct', 'recapTo', 'payInvest', 'payLoan', 'payK401', 'moneyOther']) {
+  for (const id of ['goalTarget', 'goalDeadline', 'priorV', 'priorK', 'recapTo', 'payInvest', 'payLoan', 'payK401', 'moneyOther']) {
     $(id).addEventListener('input', () => $(id).classList.remove('invalid'));
   }
   $('goalForm').addEventListener('submit', async (e) => {
@@ -2076,35 +2171,6 @@
     report(status, `Goal set ✓ ${usd0(target)} by ${ymLabel(deadline)}` + (g && g.monthsLeft ? ` · ${usd0(g.need.total)} a month` : ''));
   });
 
-  // ---- Savings target (safe to spend)
-  const targetDialog = $('targetDialog');
-  function updateTargetHint() {
-    const pct = parseAmount($('targetPct').value.replace('%', ''));
-    const f = fundsEstimate();
-    const income = f.safe ? f.safe.expected.total : f.now.income.total;
-    $('targetHint').textContent = pct !== null && pct >= 0 && pct <= 95 && income > 0
-      ? `With ${money(income)} income this month: keep ${money(income * pct / 100)}, spend up to ${money(income * (1 - pct / 100))}.` : '';
-  }
-  $('targetPct').addEventListener('input', updateTargetHint);
-  $('safeBtn').addEventListener('click', () => {
-    $('targetForm').reset();
-    clearInvalid($('targetForm'));
-    const f = fundsEstimate();
-    $('targetPct').value = f.savingsTarget !== null && f.savingsTarget !== undefined ? String(f.savingsTarget) : '70';
-    updateTargetHint();
-    targetDialog.showModal();
-  });
-  $('targetForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (e.submitter && e.submitter.value === 'cancel') return targetDialog.close();
-    const pct = parseAmount($('targetPct').value.replace('%', ''));
-    if (pct === null || pct < 0 || pct > 95) return $('targetPct').classList.add('invalid');
-    targetDialog.close();
-    enqueue({ op: 'add', table: 'funds', entry: { id: uuid(), date: today(), kind: 'Savings target', amount: pct, person: 'Both', notes: '' } });
-    const status = await sync();
-    const sf = fundsEstimate().safe;
-    report(status, `Keeping ${pct}% ✓` + (sf ? ` · ${money(sf.left.total)} safe to spend this month` : ''));
-  });
 
   // ---- Weekly email (needs a connection: it changes the sheet's script settings directly)
   const recapDialog = $('recapDialog');
@@ -2137,26 +2203,23 @@
   });
 
   // ---- Payday plan: after a salary is logged, suggest how to split it and log it in one tap.
-  // It always leaves room for spending: at least (100% - savings target) of the paycheck (30% when no
-  // target is set), or last month's spending per paycheck, whichever is more.
+  // It always leaves room for spending: at least 30% of the paycheck, or last month's spending per
+  // paycheck, whichever is more.
   const paydayDialog = $('paydayDialog');
   let payday = null;
   function openPayday(income) {
     const f = fundsEstimate();
     const who = income.person;
-    const salaries = (f.recent || []).concat(getQueue().filter((op) => op.table === 'funds' && op.op === 'add').map((op) => op.entry))
+    const salaries = (f.recent || []).concat(pendingOps().filter((op) => op.table === 'funds' && op.op === 'add').map((op) => op.entry))
       .filter((r) => r.kind === 'Income' && r.person === who && r.category === 'Salary' && String(r.date).slice(0, 7) === currentMonth())
       .filter((r, i, a) => a.findIndex((x) => x.id === r.id) === i).length;
     const checksLeft = salaries >= 2 ? 1 : 2; // usually two paychecks a month
     const last = f.history.filter((h) => h.month !== f.month).pop();
     const spendPerCheck = Math.max(0, (last ? last.spent[who] - last.loan[who] : 0) / 2);
-    // Without a savings target, keep at least 30% of the paycheck for spending.
-    const keepShare = f.savingsTarget !== null && f.savingsTarget !== undefined ? 1 - f.savingsTarget / 100 : 0.3;
-    const floorKeep = Math.max(spendPerCheck, income.amount * keepShare);
+    const floorKeep = Math.max(spendPerCheck, income.amount * 0.3);
     const loanSug = Math.round(Math.max(0, ((f.loanUsual || {})[who] || 0) - f.now.loan[who]) / checksLeft);
     const k401Sug = (f.k401Last || {})[who] || 0;
-    let investSug = f.goal ? Math.max(0, (f.goal.need[who] - f.goal.thisMonth[who]) / checksLeft - k401Sug)
-      : f.savingsTarget ? income.amount * f.savingsTarget / 100 : 0;
+    let investSug = f.goal ? Math.max(0, (f.goal.need[who] - f.goal.thisMonth[who]) / checksLeft - k401Sug) : 0;
     investSug = Math.round(Math.max(0, Math.min(investSug, income.amount - loanSug - floorKeep)));
     payday = { who, income, floorKeep };
     $('paydayTitle').textContent = `${who}'s payday plan`;

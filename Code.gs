@@ -28,6 +28,8 @@
  *   Settlement       money one person paid the other to clear what was owed (Splitwise, cash...).
  *                    Card Used = who paid, Expense For = who received. Not an expense: it never
  *                    touches budgets or spending, only the month's Settled / Status lines (green rows).
+ * Refunds are entered as negative amounts (shown in green): they lower spending, add back to the
+ * budget and reduce what is owed, exactly undoing the original expense.
  * Budgets are per calendar month and reset on the 1st (nothing carries over). The latest budget
  * row in a month sets the amount, and every expense dated in that month counts against it, even
  * one logged before the budget was set. Joint Left ($) is the joint budget minus the joint
@@ -52,7 +54,7 @@ const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
   'October', 'November', 'December'];
 const MONTH_TAB_RE = /^Sirikh (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 22;
+const BACKEND_VERSION = 23;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget', 'Settlement'];
@@ -67,7 +69,9 @@ const COLORS = {
   open: '#fef3c7',    // "Open" (still owed)
 };
 const MONEY = '$#,##0.00';
-const RECENT_COUNT = 5;
+// Entry amounts: a refund (negative amount) shows in green.
+const ENTRY_MONEY = '$#,##0.00;[Color10]-$#,##0.00';
+const RECENT_COUNT = 10;
 const SUMMARY_COL = 10; // column J
 
 function doGet() {
@@ -96,6 +100,16 @@ function doPost(e) {
           const entry = validate_(body.entry || {});
           addEntry_(entry);
           touched.push(entry.month || entry.date.slice(0, 7));
+        }
+      } else if (body.action === 'update') {
+        // An edit from the app: same id, new values (validated before anything is changed).
+        if (isCar) updateCar_(carSheet, validateCar_(body.entry || {}));
+        else if (isFunds) updateFunds_(validateFunds_(body.entry || {}));
+        else {
+          const entry = validate_(body.entry || {});
+          const old = updateEntry_(entry);
+          touched.push(entry.month || entry.date.slice(0, 7));
+          if (old) touched.push(old);
         }
       } else if (body.action === 'delete') {
         if (isCar) deleteCar_(carSheet, String(body.id || ''));
@@ -277,9 +291,33 @@ function addEntry_(entry) {
   if (ids_(sheet).indexOf(entry.id) !== -1) return;
   const row = nextRow_(sheet);
   sheet.getRange(row, 1, 1, HEADERS.length)
-    .setValues([[entry.date, entry.category, entry.amount, entry.paidBy, entry.notes, entry.type, '', entry.id, entry.expenseFor]]);
+    .setValues([entryRow_(entry)]);
   sheet.getRange(row, C.DATE + 1).setNumberFormat('yyyy-mm-dd');
-  sheet.getRange(row, C.AMOUNT + 1).setNumberFormat(MONEY);
+  sheet.getRange(row, C.AMOUNT + 1).setNumberFormat(ENTRY_MONEY);
+}
+
+const entryRow_ = (e) => [e.date, e.category, e.amount, e.paidBy, e.notes, e.type, '', e.id, e.expenseFor];
+
+// An edited entry: rewritten in place when it stays in the same month, otherwise moved to the tab
+// of its new month. Returns the month it was in before (or null if it was not found, then added).
+function updateEntry_(entry) {
+  const key = entry.month || entry.date.slice(0, 7);
+  const tabs = monthTabs_();
+  for (let t = 0; t < tabs.length; t++) {
+    const i = ids_(tabs[t].sheet).lastIndexOf(entry.id);
+    if (i === -1) continue;
+    if (tabs[t].key === key) {
+      tabs[t].sheet.getRange(i + 2, 1, 1, HEADERS.length).setValues([entryRow_(entry)]);
+      tabs[t].sheet.getRange(i + 2, C.DATE + 1).setNumberFormat('yyyy-mm-dd');
+      tabs[t].sheet.getRange(i + 2, C.AMOUNT + 1).setNumberFormat(ENTRY_MONEY);
+    } else {
+      tabs[t].sheet.deleteRow(i + 2);
+      addEntry_(entry);
+    }
+    return tabs[t].key;
+  }
+  addEntry_(entry);
+  return null;
 }
 
 // Deletes the row with this id from whichever month tab holds it; returns that month (or null).
@@ -923,9 +961,17 @@ function addCar_(sheet, e) {
   const rows = readCarRows_(sheet);
   let row = 2;
   for (let i = rows.length - 1; i >= 0; i--) if (!isEmptyCarRow_(rows[i])) { row = i + 3; break; }
-  sheet.getRange(row, 1, 1, CAR_HEADERS.length).setValues([[e.date, e.category, e.vendor, e.amount, e.paidBy,
-    e.odometer, '', e.rangeLeft, '', e.gallons, e.pricePerGallon, '', '', e.notes, e.id, e.expenseFor,
-    e.fill, e.missedBefore]]);
+  sheet.getRange(row, 1, 1, CAR_HEADERS.length).setValues([carRow_(e)]);
+}
+
+const carRow_ = (e) => [e.date, e.category, e.vendor, e.amount, e.paidBy, e.odometer, '', e.rangeLeft, '', e.gallons,
+  e.pricePerGallon, '', '', e.notes, e.id, e.expenseFor, e.fill, e.missedBefore];
+
+// An edited car entry, rewritten in its row (miles, MPG and the rest are recalculated after).
+function updateCar_(sheet, e) {
+  const i = carIds_(sheet).lastIndexOf(e.id);
+  if (i === -1) return addCar_(sheet, e);
+  sheet.getRange(i + 2, 1, 1, CAR_HEADERS.length).setValues([carRow_(e)]);
 }
 
 function deleteCar_(sheet, id) {
@@ -1171,7 +1217,7 @@ function carStats_(rows, math) {
   s.recent = data.slice(-RECENT_COUNT).reverse().map((r) => ({
     id: String(r[K.ID]), date: formatDate_(r[K.DATE], tz), category: String(r[K.CATEGORY]), vendor: String(r[K.VENDOR]),
     amount: toNumber_(r[K.AMOUNT]), paidBy: String(r[K.PAID_BY]), notes: String(r[K.NOTES]),
-    odometer: r[K.ODO], miles: r[K.MILES], mpg: r[K.MPG], eff: r[K.EFF], gallons: r[K.GAL], ppg: r[K.PPG],
+    odometer: r[K.ODO], miles: r[K.MILES], mpg: r[K.MPG], eff: r[K.EFF], gallons: r[K.GAL], ppg: r[K.PPG], rangeLeft: r[K.RANGE],
     expenseFor: carOwner_(r), fill: r[K.CATEGORY] === 'Fuel' ? (isPartial_(r) ? 'Partial' : 'Full') : '',
     missedBefore: isMarkedMissed_(r),
   }));
@@ -1300,8 +1346,8 @@ function carState_(sheet) {
 //   Use savings       spending from savings kept in earlier months. Person V or K only: savings are
 //                     individual (V's from V's income, K's from K's income), never pooled
 //   Prior investment  invested before tracking (counts toward the goal)
-//   Goal              Amount = target, Category = deadline month (yyyy-mm)
-//   Savings target    Amount = percent of income to keep (invested + saved) each month
+//   Goal              Amount = target, Category = deadline month (yyyy-mm, stored as text)
+//   Savings target    no longer used (older rows are kept and ignored)
 //
 // Each month, per person; shared costs count half each and settlements are ignored:
 //   Spent    = Joint/2 + Fixed/2 + Personal + Sonata (half of joint, own turns) + loan payments
@@ -1401,9 +1447,24 @@ function addFunds_(e) {
   if (all.some((r) => String(r[F.ID]) === e.id)) return; // retried from the offline queue
   let row = 2;
   for (let i = all.length - 1; i >= 0; i--) if (all[i][F.DATE] !== '' || all[i][F.KIND] !== '') { row = i + 3; break; }
+  writeFundsRow_(sheet, row, e);
+}
+
+// The Category cell is plain text first: otherwise the sheet turns a goal deadline like 2028-07 into a date.
+function writeFundsRow_(sheet, row, e) {
+  sheet.getRange(row, F.CATEGORY + 1).setNumberFormat('@');
   sheet.getRange(row, 1, 1, FUNDS_HEADERS.length).setValues([[e.date, e.kind, e.category, e.amount, e.person, e.notes, e.id, e.from]]);
   sheet.getRange(row, F.DATE + 1).setNumberFormat('yyyy-mm-dd');
   sheet.getRange(row, F.AMOUNT + 1).setNumberFormat(MONEY);
+}
+
+function updateFunds_(e) {
+  const sheet = fundsSheet_(true);
+  const all = sheet.getLastRow() < 2 ? [] : sheet.getRange(2, 1, sheet.getLastRow() - 1, FUNDS_HEADERS.length).getValues();
+  let i = -1;
+  for (let k = all.length - 1; k >= 0; k--) if (String(all[k][F.ID]) === e.id) { i = k; break; }
+  if (i === -1) return addFunds_(e);
+  writeFundsRow_(sheet, i + 2, e);
 }
 
 // Only the entry columns move up; the overview on the right is rebuilt anyway.
@@ -1437,7 +1498,9 @@ const daysInMonth_ = (key) => new Date(Number(key.slice(0, 4)), Number(key.slice
 function parseFunds_(fundsRows, tz) {
   return fundsRows.map((r, i) => {
     const p = String(r[F.PERSON]).trim().toUpperCase();
-    return { i: i, date: formatDate_(r[F.DATE], tz), kind: fundKind_(r[F.KIND]), category: String(r[F.CATEGORY]).trim(),
+    // A deadline the sheet already turned into a date (before version 23) reads back as yyyy-mm.
+    const cat = r[F.CATEGORY] instanceof Date ? Utilities.formatDate(r[F.CATEGORY], tz, 'yyyy-MM') : String(r[F.CATEGORY]).trim();
+    return { i: i, date: formatDate_(r[F.DATE], tz), kind: fundKind_(r[F.KIND]), category: cat,
       amount: toNumber_(r[F.AMOUNT]), person: p === 'BOTH' || p === 'JOINT' ? 'Both' : p, notes: String(r[F.NOTES]), id: String(r[F.ID]),
       from: /^(savings|surplus)$/i.test(String(r[F.FROM]).trim()) ? 'Savings' : 'Income' };
   });
@@ -1516,23 +1579,6 @@ function fundsModel_(today, fundsRows, months, carRows) {
   // Savings you can use now: earlier months' savings minus what was used or invested from them (this month included).
   const available = vk_({ V: now.savedBefore.V - now.used.V - now.investSaved.V, K: now.savedBefore.K - now.used.K - now.investSaved.K });
 
-  // ---- safe to spend
-  const targetRow = rows.filter((r) => r.kind === 'Savings target').pop();
-  let safe = null;
-  if (targetRow) {
-    const pct = targetRow.amount;
-    const past = history.slice(0, -1).filter((h) => h.income.total > 0).slice(-3);
-    const avg = (w) => (past.length ? past.reduce((s, h) => s + h.income[w], 0) / past.length : 0);
-    const expected = vk_({ V: Math.max(now.income.V, avg('V')), K: Math.max(now.income.K, avg('K')) });
-    const allowance = vk_({ V: expected.V * (1 - pct / 100), K: expected.K * (1 - pct / 100) });
-    const left = vk_({ V: allowance.V - now.spent.V, K: allowance.K - now.spent.K });
-    const daysLeft = daysInMonth_(current) - Number(today.slice(8, 10)) + 1;
-    const used = allowance.total > 0 ? round2_((now.spent.total / allowance.total) * 100) : now.spent.total > 0 ? 100 : 0;
-    safe = { percent: pct, expected: expected, allowance: allowance, spent: now.spent, left: left, daysLeft: daysLeft,
-      perDay: round2_(Math.max(0, left.total) / daysLeft), used: used,
-      status: used > 100 ? 'over' : used >= 80 ? 'warn' : 'ok', estimated: expected.total > now.income.total + 0.005 };
-  }
-
   // ---- goal (investments only)
   const goalRow = rows.filter((r) => r.kind === 'Goal').sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.i - b.i)).pop();
   let goal = null;
@@ -1590,8 +1636,8 @@ function fundsModel_(today, fundsRows, months, carRows) {
   const loanPayments = rows.filter((r) => r.kind === 'Loan payment')
     .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : b.i - a.i))
     .map((r) => ({ date: r.date, loan: r.category, amount: r.amount, person: r.person, notes: r.notes }));
-  return { month: current, today: today, start: start, now: now, available: available, history: history, safe: safe, goal: goal,
-    loans: loans, loanUsual: loanUsual, savingsTarget: targetRow ? targetRow.amount : null,
+  return { month: current, today: today, start: start, now: now, available: available, history: history, goal: goal,
+    loans: loans, loanUsual: loanUsual,
     k401Total: vk_(k401Total), k401Last: k401Last, loanPayments: loanPayments };
 }
 
@@ -1627,9 +1673,6 @@ function goalSuggestions_(g, now, available) {
 // One list of the most useful next steps, for the overview, the app and the weekly email.
 function suggestions_(model) {
   const out = [];
-  const s = model.safe;
-  if (s && s.status === 'over') out.push('Spending is ' + usd0_(-s.left.total) + ' past what keeps ' + s.percent + '% of income this month.');
-  else if (s && s.status === 'warn') out.push(Math.round(s.used) + '% of this month\'s spending room is used; about ' + usd0_(s.perDay) + ' a day keeps ' + s.percent + '%.');
   if (model.goal) out.push.apply(out, model.goal.suggestions);
   return out;
 }
@@ -1678,12 +1721,6 @@ function writeFundsSummary_(sheet, model) {
   trio('Invested', n.invest);
   trio('Savings this month', n.savings);
   line(['Savings rate (invested + savings)', pct(n.rate.V), pct(n.rate.K), pct(n.rate.total)]);
-  if (model.safe) {
-    const s = model.safe;
-    trio('Can spend (keeping ' + s.percent + '%)', s.allowance);
-    trio('Safe to spend left', s.left);
-    line(['Per day for ' + s.daysLeft + ' days', '', '', s.perDay], 'money');
-  }
   gap();
   line(['401(K) (taken before pay)', 'V', 'K', 'Total'], 'head');
   trio('This month', n.k401);
@@ -1888,13 +1925,12 @@ function recapText_(today, model, carRows) {
   lines.push('Spent in ' + n.label + ' so far: ' + usd0_(soFar) + (lastSame > 0 ? ' (last month by the same day: ' + usd0_(lastSame) + ', ' +
     (soFar <= lastSame ? usd0_(lastSame - soFar) + ' less' : usd0_(soFar - lastSame) + ' more') + ')' : '') + '.');
   lines.push('Last 7 days: ' + usd0_(week) + '.');
-  if (model.safe) lines.push('Safe to spend: ' + (model.safe.left.total >= 0 ? usd0_(model.safe.left.total) + ' left, about ' + usd0_(model.safe.perDay) + ' a day' : usd0_(-model.safe.left.total) + ' over') + ' to keep ' + model.safe.percent + '% of income.');
   if (n.income.total > 0) lines.push('Income ' + usd0_(n.income.total) + ', invested ' + usd0_(n.invest.total) + ', savings ' + usd0_(n.savings.total) + (n.rate.total !== null ? ' (' + Math.round(n.rate.total) + '% kept)' : '') + '.');
   if (n.k401.total > 0) lines.push('401(K) this month: ' + usd0_(n.k401.total) + ' (V ' + usd0_(n.k401.V) + ', K ' + usd0_(n.k401.K) + ').');
   lines.push('Savings available from earlier months: ' + usd0_(model.available.total) + '.');
   if (model.goal) lines.push('Goal ' + usd0_(model.goal.target) + ' by ' + model.goal.deadlineLabel + ': ' + model.goal.percent.toFixed(1) + '% done, ' + usd0_(model.goal.need.total) + ' a month needed (' + (model.goal.onTrack ? 'on track' : 'behind') + ').');
   if (n.loan.total > 0) lines.push('Loan payments this month: ' + usd0_(n.loan.total) + ' (' + model.loans.filter((l) => l.thisMonth > 0).map((l) => l.name + ' ' + usd0_(l.thisMonth)).join(', ') + ').');
-  return { subject: 'Sirikh weekly: ' + usd0_(soFar) + ' spent in ' + n.label.split(' ')[0] + (model.safe ? ', ' + usd0_(Math.max(0, model.safe.left.total)) + ' safe to spend' : ''), lines: lines };
+  return { subject: 'Sirikh weekly: ' + usd0_(soFar) + ' spent in ' + n.label.split(' ')[0], lines: lines };
 }
 
 // Runs from the weekly trigger (and "Send a test" in the app).

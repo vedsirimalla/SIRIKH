@@ -210,27 +210,7 @@
 
     <div id="moneyDash" hidden>
       <p id="mOutdated" class="status open" role="status" hidden></p>
-      <section class="card balance-card" aria-labelledby="mSafeTitle">
-        <div id="mSafeTitle" class="eyebrow">Safe to spend</div>
-        <div id="mSafeBody" hidden>
-          <div class="left-line">
-            <span id="mSafe" class="balance-amount">—</span>
-            <span id="mSafeWord" class="left-word">left this month</span>
-          </div>
-          <div class="meter" role="progressbar" aria-label="Spending room used" aria-valuemin="0" aria-valuemax="100">
-            <div id="mSafeFill" class="meter-fill"></div>
-          </div>
-          <div class="stats">
-            <div><span class="stat-label">V left</span><span id="mSafeV">—</span></div>
-            <div><span class="stat-label">K left</span><span id="mSafeK">—</span></div>
-            <div><span class="stat-label">Per day</span><span id="mSafeDay">—</span></div>
-          </div>
-        </div>
-        <div id="mSafeNote" class="pace">Pick how much of your income to save each month (say 70%). This shows what you can still spend without dipping into it.</div>
-        <div class="row"><button type="button" id="safeBtn" class="full">Set savings target</button></div>
-      </section>
-
-      <section class="card" aria-labelledby="mMonthTitle">
+      <section class="card balance-card" aria-labelledby="mMonthTitle">
         <div id="mMonthTitle" class="eyebrow">This month</div>
         <div class="left-line">
           <span id="mSaved" class="balance-amount">—</span>
@@ -240,7 +220,7 @@
           <thead><tr><th scope="col"></th><th scope="col">V</th><th scope="col">K</th><th scope="col">Total</th></tr></thead>
           <tbody id="mTable"></tbody>
         </table>
-        <div class="muted">Savings are each person's own: V's income minus V's spending and investments, and the same for K (shared costs count half each; settlements are ignored). Total just adds the two.</div>
+        <div class="muted">Savings are simply what is left: each person's income minus their spending and investments (shared costs count half each; refunds lower spending; settlements are ignored). Total just adds V and K.</div>
       </section>
 
       <section class="card k401-card" aria-labelledby="mK401Title">
@@ -268,14 +248,6 @@
           <tbody id="mFrom"></tbody>
         </table>
         <div class="muted">Unspent joint budget (half each) and unspent personal budget are already inside this month's savings; this only shows where they came from.</div>
-      </section>
-
-      <section class="card" aria-labelledby="mSharedTitle">
-        <div id="mSharedTitle" class="eyebrow">Shared this month</div>
-        <table class="split money-table">
-          <thead><tr><th scope="col"></th><th scope="col">Amount</th><th scope="col">V half</th><th scope="col">K half</th></tr></thead>
-          <tbody id="mShared"></tbody>
-        </table>
       </section>
 
       <section class="card" aria-labelledby="mSurplusTitle">
@@ -335,15 +307,16 @@
 
       <section class="card" aria-labelledby="mRecapTitle">
         <div id="mRecapTitle" class="eyebrow">Weekly email</div>
-        <div id="mRecapNote" class="pace">A short email every Sunday evening: spending vs last month, safe to spend, savings, goal and loan payments.</div>
+        <div id="mRecapNote" class="pace">A short email every Sunday evening: spending vs last month, savings, goal and loan payments.</div>
         <div class="row"><button type="button" id="recapBtn" class="full">Set up weekly email</button></div>
       </section>
     </div>
 
     <form id="expenseForm" class="card" autocomplete="off" novalidate>
-      <label>Date
-        <input type="date" id="date" required>
-      </label>
+      <div id="editBar" class="edit-bar" role="status" hidden>
+        <span id="editText">Editing</span>
+        <button type="button" id="editCancel">Cancel</button>
+      </div>
 
       <fieldset class="seg-field" id="typeField">
         <legend>Add</legend>
@@ -455,11 +428,15 @@
         </div>
       </div>
 
-      <label>Amount ($)
+      <label><span id="amountLabel">Amount ($)</span>
         <div class="amount">
           <span>$</span>
           <input type="text" id="amount" inputmode="decimal" placeholder="0.00" required>
         </div>
+      </label>
+      <label class="check" id="refundField">
+        <input type="checkbox" id="isRefund">
+        <span>Refund (money back on this card; saved as a negative amount)</span>
       </label>
 
       <div id="payGrid" class="grid2">
@@ -474,6 +451,10 @@
         </label>
       </div>
       <div id="owedHint" class="fuel-preview" hidden></div>
+
+      <label>Date
+        <input type="date" id="date" required>
+      </label>
 
       <label>Notes
         <input type="text" id="notes" placeholder="Milk, bananas, gas…" autocapitalize="sentences">
@@ -621,21 +602,6 @@
           </label>
         </div>
       </div>
-      <div class="row end">
-        <button value="cancel" formnovalidate>Cancel</button>
-        <button value="save" class="primary">Save</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="targetDialog">
-    <form method="dialog" id="targetForm" novalidate>
-      <h2>Savings target</h2>
-      <p class="muted">The share of each month's income to keep (investments plus savings). Safe to spend = expected income minus this share minus what is already spent, loan payments included.</p>
-      <label>Save each month (%)
-        <input type="text" id="targetPct" inputmode="decimal" placeholder="70">
-      </label>
-      <p id="targetHint" class="muted"></p>
       <div class="row end">
         <button value="cancel" formnovalidate>Cancel</button>
         <button value="save" class="primary">Save</button>
