@@ -2,9 +2,28 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 25; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 26; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
+  // Tags for Joint and Personal expenses (same list as Code.gs). Fixed bills are their own tag.
+  const TAGS = ['Groceries', 'Dining out', 'Entertainment', 'Shopping', 'Household items', 'Subscriptions', 'Travel', 'Fuel',
+    'Transport', 'Health', 'Personal care', 'Gifts', 'Education', 'Other'];
+  // A first guess from the category (same rules as Code.gs); a tag picked for a category is remembered.
+  const TAG_GUESSES = [
+    ['Fuel', /\b(gas|fuel|shell|exxon|bp|chevron|sunoco|wawa|sheetz|circle k|speedway)\b/],
+    ['Groceries', /\b(ht|harris teeter|costco|walmart|aldi|kroger|lidl|publix|trader joe|whole foods|food lion|wegmans|sam'?s club|grocer|patel|apna|indian store|safeway|giant|sprouts|bj'?s)\b/],
+    ['Dining out', /\b(restaurant|cafe|coffee|starbucks|dunkin|pizza|biryani|rice|chipotle|mcdonald|burger|taco|sushi|lunch|dinner|breakfast|doordash|uber ?eats|grubhub|bar|boba|tea|chai|dosa|wendy|subway|panera|chick)\b/],
+    ['Subscriptions', /\b(netflix|spotify|prime|icloud|youtube|hulu|disney|hbo|chatgpt|claude|apple music|subscription|membership|gym)\b/],
+    ['Entertainment', /\b(movie|cinema|amc|regal|concert|game|bowling|show|ticket|event|park)\b/],
+    ['Travel', /\b(flight|airline|hotel|airbnb|trip|vacation|booking|expedia|delta|united|american airlines|southwest)\b/],
+    ['Transport', /\b(uber|lyft|metro|bus|train|amtrak|parking|toll|taxi)\b/],
+    ['Health', /\b(pharmacy|cvs|walgreens|doctor|dentist|hospital|medicine|clinic|health|copay)\b/],
+    ['Personal care', /\b(salon|haircut|barber|spa|nails|sephora|ulta|cosmetic)\b/],
+    ['Household items', /\b(ikea|home depot|lowe'?s|bed bath|detergent|cleaning|furniture|kitchen|household|dollar)\b/],
+    ['Shopping', /\b(amazon|target|mall|clothes|shoes|nike|zara|h&m|best buy|apple store|shopping|tj maxx|marshalls|ross)\b/],
+    ['Gifts', /\b(gift|birthday|present|wedding)\b/],
+    ['Education', /\b(course|book|tuition|udemy|class|exam)\b/],
+  ];
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
   const TYPE_HINTS = {
     Joint: 'Joint: shared day-to-day spending. Comes out of the monthly budget and counts in who owes whom.',
@@ -27,6 +46,7 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
+    if (op.op !== 'delete' && !op.table && op.entry && op.entry.tag) return 24; // tags (version 24 adds the Tag column)
     if (op.op === 'update') return 23; // editing an entry
     if (op.table === 'funds') return op.op === 'add' && op.entry.kind === '401(K)' ? 21 : 20;
     if (op.table === 'car') return op.op !== 'add' ? 9 : op.entry.category === 'Settlement' ? 18 : 15;
@@ -429,6 +449,7 @@
       tag.textContent = isCar ? r.category : TYPE_LABELS[r.type] || r.type || 'Joint';
       const owner = r.expenseFor && r.expenseFor !== 'Both' ? r.expenseFor : '';
       const parts = [prettyDate(r.date)];
+      if (!isCar && r.tag && (r.type === 'Joint' || r.type === 'Personal')) parts.push(r.tag);
       if (refundRow) parts.push('refund');
       if (isSettlement) parts.push(`${r.paidBy} paid ${r.paidBy === 'V' ? 'K' : 'V'}`);
       else if (isCar && r.expenseFor === 'Joint') parts.push('Joint');
@@ -989,6 +1010,8 @@
       month: data.month || '',
       needsBudget: data.needsBudget || null,
       funds: data.funds || null,
+      analytics: data.analytics || null,
+      unsettled: data.unsettled || [],
     });
     store.set('syncedAt', Date.now());
   }
@@ -1070,6 +1093,32 @@
     return checked ? checked.value : '';
   }
 
+  // ---------- Tags
+  let tagPicked = false; // true once the tag was chosen by hand (then typing the category leaves it alone)
+  for (const t of TAGS) {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = t;
+    $('tag').appendChild(opt);
+  }
+  function suggestTag(category) {
+    const c = String(category || '').trim().toLowerCase();
+    if (!c) return '';
+    const known = store.get('tagMemory', {})[c];
+    if (TAGS.includes(known)) return known;
+    const hit = TAG_GUESSES.find(([, re]) => re.test(c));
+    return hit ? hit[0] : 'Other';
+  }
+  function rememberTag(category, tag) {
+    const memory = store.get('tagMemory', {});
+    memory[String(category).trim().toLowerCase()] = tag;
+    const keys = Object.keys(memory);
+    if (keys.length > 300) delete memory[keys[0]];
+    store.set('tagMemory', memory);
+  }
+  $('category').addEventListener('input', () => { if (!tagPicked) $('tag').value = suggestTag($('category').value); });
+  $('tag').addEventListener('change', () => { tagPicked = !!$('tag').value; $('tag').classList.remove('invalid'); });
+
   // Shows the description for the selected type, and swaps the Category typing field
   // for the fixed bill buttons when Fixed is selected.
   function updateTypeHint() {
@@ -1081,6 +1130,7 @@
     $('category').hidden = fixed;
     $('fixedPicker').hidden = !fixed;
     $('categoryField').hidden = car || moneyType;
+    $('tagField').hidden = !(type === 'Joint' || type === 'Personal');
     $('carFields').hidden = !car;
     $('moneyFields').hidden = !moneyType;
     $('payGrid').hidden = moneyType;
@@ -1344,6 +1394,8 @@
       return showBanner('Pick which fixed bill this is.', 'err');
     }
     if (!category) return markInvalid($('category'), 'Enter where you spent it.');
+    const tagged = type === 'Joint' || type === 'Personal';
+    if (tagged && !$('tag').value) return markInvalid($('tag'), 'Pick a tag (where the money went).');
     if (amount === null || amount === 0) return markInvalid($('amount'), 'Enter a valid amount.');
 
     const entry = {
@@ -1355,7 +1407,9 @@
       notes: $('notes').value.trim(),
       type,
       expenseFor: type === 'Personal' ? selectedFor() : '',
+      tag: tagged ? $('tag').value : type === 'Fixed' ? category : '',
     };
+    if (tagged) rememberTag(category, entry.tag);
     const edited = queueSave('', entry);
     store.set('paidBy', entry.paidBy);
 
@@ -1453,7 +1507,7 @@
   }
   $('editCancel').addEventListener('click', cancelEdit);
   // A cleared form always starts as a normal amount, not a refund.
-  $('expenseForm').addEventListener('reset', () => { $('amountLabel').textContent = 'Amount ($)'; });
+  $('expenseForm').addEventListener('reset', () => { $('amountLabel').textContent = 'Amount ($)'; tagPicked = false; });
 
   function startEdit(r, table, name) {
     if (table === 'funds' && r.kind === 'Goal') return $('goalBtn').click();
@@ -1496,6 +1550,7 @@
       updateTypeHint();
       if (type === 'Fixed') pick('fixedCat', r.category);
       else $('category').value = r.category;
+      if (type === 'Joint' || type === 'Personal') { $('tag').value = TAGS.includes(r.tag) ? r.tag : suggestTag(r.category); tagPicked = true; }
       $('paidBy').value = r.paidBy;
       if (type === 'Personal') $('expenseFor').value = r.expenseFor || r.paidBy;
     }
@@ -2120,7 +2175,415 @@ if (ready && f.now.income.total > 0) {
     $('hTipsCard').hidden = !tips.length;
     $('hTips').innerHTML = '';
     for (const t of tips) $('hTips').appendChild(el('li', '', t));
+    renderAnalytics();
   }
+
+  // ---------- Analytics (Home): where the money goes, by tag and type, month over month and year over year.
+  // Rows come from the sheet (state.analytics): spend [month, group, tag, who, amount], funds [month, kind, who, amount].
+  // Series keep their color whatever the filter: Joint, Fixed, Personal V, Personal K, Sonata.
+  const SERIES = ['Joint', 'Fixed', 'Personal V', 'Personal K', 'Sonata'];
+  const SERIES_CLASS = { 'Joint': 's1', 'Fixed': 's2', 'Personal V': 's3', 'Personal K': 's4', 'Sonata': 's5' };
+  const AN_GROUPS = [['all', 'All'], ['Joint', 'Joint'], ['Fixed', 'Fixed'], ['Personal', 'Personal'],
+    ['Personal V', 'Personal V'], ['Personal K', 'Personal K'], ['Sonata', 'Sonata']];
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const seriesOf = (row) => (row[1] === 'Personal' ? 'Personal ' + row[3] : row[1]);
+  const ymLabelShort = (ym) => `${MON[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
+  const addMonths = (ym, n) => {
+    const d = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1 + n, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const sum = (rows) => round2(rows.reduce((t, r) => t + r[r.length - 1], 0));
+  let anFilter = store.get('an', null);
+
+  function groupMatches(row, group) {
+    if (group === 'all') return true;
+    if (group === 'Personal') return row[1] === 'Personal';
+    return seriesOf(row) === group;
+  }
+
+  // The selected period and what it is compared with. Each comparison has its own test for the
+  // earlier period, and nowTest for the part of the selected period it is compared with.
+  // have = months with any spending logged.
+  function anPeriods(f, cur, have) {
+    const inYM = (y, m) => (k) => (y === 'all' || k.slice(0, 4) === y) && (m === 'all' || k.slice(5, 7) === m);
+    const main = { test: inYM(f.year, f.month), label: '' };
+    const out = { main, compare: [] };
+    if (f.year !== 'all' && f.month !== 'all') {
+      const ym = `${f.year}-${f.month}`;
+      main.label = ymLabelShort(ym);
+      const prev = addMonths(ym, -1);
+      out.compare.push({ test: (k) => k === prev, label: `vs ${ymLabelShort(prev)}`, short: MON[Number(prev.slice(5, 7)) - 1] });
+      const ly = `${Number(f.year) - 1}-${f.month}`;
+      out.compare.push({ test: (k) => k === ly, label: `vs ${ymLabelShort(ly)}`, short: ymLabelShort(ly) });
+      out.days = ym === cur ? Number(today().slice(8, 10)) : new Date(Number(f.year), Number(f.month), 0).getDate();
+    } else if (f.year !== 'all') {
+      // A whole year: compared month for month with the same months of last year, only the months
+      // logged in both (tracking may have started partway through last year).
+      const ytd = f.year === cur.slice(0, 4);
+      const lastM = ytd ? cur.slice(5, 7) : '12';
+      main.label = ytd ? `${f.year} so far` : f.year;
+      const py = String(Number(f.year) - 1);
+      const both = MON.map((_, i) => String(i + 1).padStart(2, '0'))
+        .filter((m) => m <= lastM && have.has(`${py}-${m}`) && have.has(`${f.year}-${m}`));
+      if (both.length) {
+        const span = both.length === 12 ? '' : both.length === 1 ? ` ${MON[Number(both[0]) - 1]}` : ` ${MON[Number(both[0]) - 1]} to ${MON[Number(both[both.length - 1]) - 1]}`;
+        out.compare.push({ test: (k) => k.slice(0, 4) === py && both.includes(k.slice(5, 7)),
+          nowTest: (k) => k.slice(0, 4) === f.year && both.includes(k.slice(5, 7)),
+          label: `vs${span} ${py}`, short: py, partial: both.length < Number(lastM) });
+      }
+      out.months = Number(lastM);
+    } else if (f.month !== 'all') {
+      main.label = `Every ${MON[Number(f.month) - 1]}`;
+    } else {
+      main.label = 'All time';
+    }
+    return out;
+  }
+
+  function anDelta(now, before, label) {
+    if (!before) return { text: `nothing ${label.replace(/^vs /, 'in ')}`, kind: '' };
+    const diff = round2(now - before);
+    const pct = Math.round((diff / Math.abs(before)) * 100);
+    const arrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '';
+    return { text: `${arrow} ${usd0(Math.abs(diff))} (${Math.abs(pct)}%) ${label}`.trim(), kind: diff > 0 ? 'up' : diff < 0 ? 'down' : '' };
+  }
+
+  // A readout line under a chart: what the touched mark stands for (hover or tap).
+  function readout(fig, text) {
+    let out = fig.querySelector('.readout');
+    if (!out) { out = el('div', 'readout'); out.setAttribute('aria-live', 'polite'); fig.appendChild(out); }
+    out.textContent = text;
+  }
+  function touch(mark, fig, text) {
+    const show = () => {
+      fig.querySelectorAll('.on').forEach((x) => x.classList.remove('on'));
+      mark.classList.add('on');
+      readout(fig, text);
+    };
+    mark.addEventListener('pointerenter', show);
+    mark.addEventListener('click', show);
+    mark.setAttribute('tabindex', '0');
+    mark.addEventListener('focus', show);
+    mark.appendChild(svgEl('title', {}, text));
+  }
+
+  function legend(names) {
+    const box = el('div', 'legend');
+    for (const n of names) {
+      const item = el('span', 'legend-item');
+      item.append(el('span', 'swatch ' + (SERIES_CLASS[n] || n)), document.createTextNode(n));
+      box.appendChild(item);
+    }
+    return box;
+  }
+
+  // Donut: share of each type in the period, total in the middle.
+  function donut(title, parts, total) {
+    const fig = el('figure', 'chart an-donut');
+    fig.appendChild(el('figcaption', '', title));
+    const wrap = el('div', 'donut-wrap');
+    const svg = svgEl('svg', { viewBox: '0 0 120 120', role: 'img', 'aria-label': title });
+    const R = 50, r = 33, cx = 60, cy = 60;
+    let a0 = -Math.PI / 2;
+    const positive = parts.filter((p) => p.value > 0);
+    const whole = positive.reduce((t, p) => t + p.value, 0) || 1;
+    for (const p of positive) {
+      const a1 = a0 + (p.value / whole) * Math.PI * 2;
+      const big = a1 - a0 > Math.PI ? 1 : 0;
+      const pt = (rad, a) => `${cx + rad * Math.cos(a)},${cy + rad * Math.sin(a)}`;
+      const d = positive.length === 1
+        ? `M${cx},${cy - R}A${R},${R} 0 1 1 ${cx - 0.01},${cy - R}L${cx - 0.01},${cy - r}A${r},${r} 0 1 0 ${cx},${cy - r}Z`
+        : `M${pt(R, a0)}A${R},${R} 0 ${big} 1 ${pt(R, a1)}L${pt(r, a1)}A${r},${r} 0 ${big} 0 ${pt(r, a0)}Z`;
+      const seg = svgEl('path', { d, class: 'seg ' + SERIES_CLASS[p.name] });
+      touch(seg, fig, `${p.name}: ${money(p.value)} (${Math.round((p.value / whole) * 100)}%)`);
+      svg.appendChild(seg);
+      a0 = a1;
+    }
+    svg.appendChild(svgEl('text', { x: cx, y: cy - 2, 'text-anchor': 'middle', class: 'donut-total' }, usd0(total)));
+    svg.appendChild(svgEl('text', { x: cx, y: cy + 12, 'text-anchor': 'middle', class: 'axis' }, 'spent'));
+    wrap.appendChild(svg);
+    const list = el('ul', 'donut-legend');
+    for (const p of parts) {
+      const li = el('li');
+      li.append(el('span', 'swatch ' + SERIES_CLASS[p.name]), el('span', 'dl-name', p.name),
+        el('span', 'dl-amt', money(p.value)), el('span', 'dl-pct', `${whole ? Math.round((Math.max(p.value, 0) / whole) * 100) : 0}%`));
+      list.appendChild(li);
+    }
+    wrap.appendChild(list);
+    fig.appendChild(wrap);
+    readout(fig, 'Tap a slice for its amount.');
+    return fig;
+  }
+
+  // Stacked columns, one per month, by type. The selected month is outlined.
+  function stackedMonths(title, keys, rows, names, selected) {
+    const fig = el('figure', 'chart');
+    fig.appendChild(el('figcaption', '', title));
+    if (names.length > 1) fig.appendChild(legend(names));
+    const svg = svgEl('svg', { viewBox: '0 0 320 150', role: 'img', 'aria-label': title });
+    const L = 34, R = 316, T = 12, B = 124;
+    const totals = keys.map((k) => names.map((n) => sum(rows.filter((x) => x[0] === k && seriesOf(x) === n))));
+    const max = Math.max(1, ...totals.map((t) => t.reduce((a, b) => a + Math.max(b, 0), 0)));
+    const y = (v) => B - (v / max) * (B - T);
+    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: y(max), y2: y(max), class: 'grid' }));
+    svg.appendChild(svgEl('text', { x: L - 4, y: y(max) + 3, 'text-anchor': 'end', class: 'axis' }, usd0(max)));
+    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: B, y2: B, class: 'base' }));
+    const slot = (R - L) / keys.length;
+    const w = Math.min(18, slot - 4);
+    keys.forEach((k, i) => {
+      const x = L + slot * i + (slot - w) / 2;
+      const g = svgEl('g', { class: 'col' + (k === selected ? ' sel' : '') });
+      let top = B;
+      const parts = [];
+      names.forEach((n, j) => {
+        const v = totals[i][j];
+        if (v <= 0) return;
+        const h = (v / max) * (B - T);
+        g.appendChild(svgEl('rect', { x, y: top - h, width: w, height: Math.max(h - 1, 0.5), rx: 2, class: 'seg ' + SERIES_CLASS[n] }));
+        top -= h;
+        parts.push(`${n} ${usd0(v)}`);
+      });
+      const total = round2(totals[i].reduce((a, b) => a + b, 0));
+      // A wide invisible target, bigger than the column.
+      g.insertBefore(svgEl('rect', { x: L + slot * i, y: T, width: slot, height: B - T, class: 'hit' }), g.firstChild);
+      if (k === selected) g.appendChild(svgEl('rect', { x: x - 2, y: top - 2, width: w + 4, height: B - top + 2, rx: 3, class: 'sel-ring' }));
+      touch(g, fig, `${ymLabelShort(k)}: ${money(total)}${names.length > 1 && parts.length ? ' · ' + parts.join(', ') : ''}`);
+      svg.appendChild(g);
+      if (keys.length <= 12 || i % 2 === 0) {
+        svg.appendChild(svgEl('text', { x: x + w / 2, y: 140, 'text-anchor': 'middle', class: 'axis' + (k === selected ? ' axis-sel' : '') }, MON[Number(k.slice(5, 7)) - 1]));
+      }
+    });
+    fig.appendChild(svg);
+    const sel = keys.indexOf(selected) !== -1 ? selected : keys[keys.length - 1];
+    const si = keys.indexOf(sel);
+    readout(fig, `${ymLabelShort(sel)}: ${money(round2(totals[si].reduce((a, b) => a + b, 0)))}. Tap a month for its breakdown.`);
+    return fig;
+  }
+
+  // This year against last year, month by month (two columns per month).
+  function yearOverYear(title, year, rows, selectedMonth, lastMonth) {
+    const fig = el('figure', 'chart');
+    fig.appendChild(el('figcaption', '', title));
+    const py = String(Number(year) - 1);
+    const box = el('div', 'legend');
+    const item = (cls, text) => { const s = el('span', 'legend-item'); s.append(el('span', 'swatch ' + cls), document.createTextNode(text)); box.appendChild(s); };
+    item('yoy-now', year);
+    item('yoy-prev', py);
+    fig.appendChild(box);
+    const svg = svgEl('svg', { viewBox: '0 0 320 150', role: 'img', 'aria-label': title });
+    const L = 34, R = 316, T = 12, B = 124;
+    const val = (y, m) => sum(rows.filter((x) => x[0] === `${y}-${m}`));
+    const months = MON.map((_, i) => String(i + 1).padStart(2, '0'));
+    const now = months.map((m) => (Number(m) <= lastMonth ? val(year, m) : null));
+    const prev = months.map((m) => val(py, m));
+    const max = Math.max(1, ...now.filter((v) => v !== null), ...prev);
+    const y = (v) => B - (Math.max(v, 0) / max) * (B - T);
+    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: y(max), y2: y(max), class: 'grid' }));
+    svg.appendChild(svgEl('text', { x: L - 4, y: y(max) + 3, 'text-anchor': 'end', class: 'axis' }, usd0(max)));
+    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: B, y2: B, class: 'base' }));
+    const slot = (R - L) / 12;
+    const w = Math.min(8, (slot - 4) / 2);
+    months.forEach((m, i) => {
+      const x0 = L + slot * i + slot / 2 - w - 1;
+      const g = svgEl('g', { class: 'col' + (m === selectedMonth ? ' sel' : '') });
+      g.appendChild(svgEl('rect', { x: L + slot * i, y: T, width: slot, height: B - T, class: 'hit' }));
+      if (prev[i] > 0) g.appendChild(svgEl('rect', { x: x0, y: y(prev[i]), width: w, height: Math.max(B - y(prev[i]), 0.5), rx: 2, class: 'seg yoy-prev' }));
+      if (now[i] > 0) g.appendChild(svgEl('rect', { x: x0 + w + 2, y: y(now[i]), width: w, height: Math.max(B - y(now[i]), 0.5), rx: 2, class: 'seg yoy-now' }));
+      const d = now[i] !== null && prev[i] ? ` (${now[i] >= prev[i] ? '+' : '-'}${Math.abs(Math.round(((now[i] - prev[i]) / prev[i]) * 100))}%)` : '';
+      touch(g, fig, `${MON[i]}: ${year} ${now[i] === null ? 'not yet' : money(now[i])} · ${py} ${money(prev[i])}${d}`);
+      svg.appendChild(g);
+      svg.appendChild(svgEl('text', { x: L + slot * i + slot / 2, y: 140, 'text-anchor': 'middle', class: 'axis' + (m === selectedMonth ? ' axis-sel' : '') }, MON[i].slice(0, 1)));
+    });
+    fig.appendChild(svg);
+    // Totals over the months logged in both years.
+    const both = months.map((_, i) => i).filter((i) => now[i] && prev[i]);
+    const nowSame = round2(both.reduce((t, i) => t + now[i], 0));
+    const prevSame = round2(both.reduce((t, i) => t + prev[i], 0));
+    const span = both.length ? (both.length === 1 ? MON[both[0]] : `${MON[both[0]]} to ${MON[both[both.length - 1]]}`) : '';
+    readout(fig, both.length
+      ? `${span}: ${year} ${money(nowSame)} · ${py} ${money(prevSame)}. Tap a month to compare.`
+      : 'Tap a month to compare.');
+    return fig;
+  }
+
+  function renderAnalytics() {
+    const st = getState() || {};
+    const a = st.analytics;
+    const card = $('anCard');
+    card.hidden = !getSettings();
+    if (!a) {
+      $('anBody').hidden = true;
+      $('anEmpty').hidden = false;
+      $('anEmpty').textContent = st.version && st.version < 24
+        ? 'Charts need the Apps Script at version 24. Paste the latest Code.gs and deploy a new version.'
+        : 'Charts appear after the first sync.';
+      return;
+    }
+    const cur = currentMonth();
+    const spendAll = a.spend || [];
+    const years = [...new Set(spendAll.map((r) => r[0].slice(0, 4)).concat(cur.slice(0, 4)))].sort().reverse();
+    if (!anFilter || (anFilter.year !== 'all' && !years.includes(anFilter.year))) anFilter = { year: cur.slice(0, 4), month: cur.slice(5, 7), group: 'all', table: false };
+    const f = anFilter;
+    const fill = (select, options, value) => {
+      select.innerHTML = '';
+      for (const [v, label] of options) { const o = document.createElement('option'); o.value = v; o.textContent = label; select.appendChild(o); }
+      select.value = value;
+    };
+    fill($('anYear'), [['all', 'All years'], ...years.map((y) => [y, y])], f.year);
+    fill($('anMonth'), [['all', f.year === 'all' ? 'All months' : 'Whole year'], ...MON.map((m, i) => [String(i + 1).padStart(2, '0'), m])], f.month);
+    fill($('anGroup'), AN_GROUPS, f.group);
+    $('anTableBtn').setAttribute('aria-pressed', String(!!f.table));
+    $('anTableBtn').textContent = f.table ? 'Charts' : 'Table';
+
+    const spend = spendAll.filter((r) => groupMatches(r, f.group));
+    const periods = anPeriods(f, cur, new Set(spendAll.map((r) => r[0])));
+    const inMain = spend.filter((r) => periods.main.test(r[0]));
+    const total = sum(inMain);
+    $('anEmpty').hidden = !!spendAll.length;
+    $('anEmpty').textContent = 'Nothing logged yet. Charts fill in as you save expenses.';
+    $('anBody').hidden = !spendAll.length;
+    if (!spendAll.length) return;
+
+    // Headline numbers.
+    const kpis = $('anKpis');
+    kpis.innerHTML = '';
+    const kpi = (label, value, subs) => {
+      const box = el('div', 'kpi');
+      box.append(el('span', 'k-label', label), el('span', 'k-value', value));
+      for (const s of subs) if (s) box.appendChild(el('span', 'k-sub' + (s.kind ? ' ' + s.kind : ''), s.text));
+      kpis.appendChild(box);
+    };
+    const nowFor = (c) => (c.nowTest ? sum(spend.filter((r) => c.nowTest(r[0]))) : total);
+    kpi(`Spent · ${periods.main.label}`, money(total), periods.compare.map((c) => anDelta(nowFor(c), sum(spend.filter((r) => c.test(r[0]))), c.label)));
+    const funds = (a.funds || []).filter((r) => periods.main.test(r[0]));
+    const income = sum(funds.filter((r) => r[1] === 'Income'));
+    if (periods.days) kpi('Per day', money(total / periods.days), [{ text: `over ${periods.days} day${periods.days === 1 ? '' : 's'}` }]);
+    else {
+      const monthsWithData = new Set(inMain.map((r) => r[0])).size || 1;
+      kpi('Per month', money(total / (periods.months || monthsWithData)), [{ text: `average of ${periods.months || monthsWithData} month${(periods.months || monthsWithData) === 1 ? '' : 's'}` }]);
+    }
+    if (income > 0 && f.group === 'all') kpi('Income', money(income), [{ text: `${Math.round((total / income) * 100)}% of it spent` }]);
+
+    // By tag: ranked, with the change against the first comparison period.
+    const cmp = periods.compare[0];
+    const tagTotals = {};
+    const tagBefore = {};
+    const tagNow = {};
+    for (const r of inMain) tagTotals[r[2]] = round2((tagTotals[r[2]] || 0) + r[4]);
+    if (cmp) {
+      for (const r of spend.filter((x) => cmp.test(x[0]))) tagBefore[r[2]] = round2((tagBefore[r[2]] || 0) + r[4]);
+      for (const r of spend.filter((x) => (cmp.nowTest || periods.main.test)(x[0]))) tagNow[r[2]] = round2((tagNow[r[2]] || 0) + r[4]);
+    }
+    const tags = Object.keys(tagTotals).filter((t) => tagTotals[t] !== 0).sort((x, y) => tagTotals[y] - tagTotals[x]);
+    const tagMax = Math.max(1, ...tags.map((t) => tagTotals[t]));
+
+    // By type (donut) and month by month.
+    const names = SERIES.filter((n) => spend.some((r) => seriesOf(r) === n));
+    const parts = names.map((n) => ({ name: n, value: sum(inMain.filter((r) => seriesOf(r) === n)) }));
+    let keys;
+    if (f.year !== 'all' && f.month === 'all') {
+      const last = f.year === cur.slice(0, 4) ? Number(cur.slice(5, 7)) : 12;
+      keys = Array.from({ length: last }, (_, i) => `${f.year}-${String(i + 1).padStart(2, '0')}`);
+    } else {
+      const end = f.year !== 'all' && f.month !== 'all' ? `${f.year}-${f.month}` : cur;
+      keys = Array.from({ length: 12 }, (_, i) => addMonths(end, i - 11));
+      const first = spendAll.length ? spendAll.reduce((m, r) => (r[0] < m ? r[0] : m), cur) : cur;
+      while (keys.length > 3 && keys[0] < first) keys.shift();
+    }
+    const selected = f.year !== 'all' && f.month !== 'all' ? `${f.year}-${f.month}` : '';
+    const yoyYear = f.year !== 'all' ? f.year : cur.slice(0, 4);
+    const hasLastYear = spend.some((r) => r[0].slice(0, 4) === String(Number(yoyYear) - 1));
+
+    const charts = $('anCharts');
+    const table = $('anTable');
+    charts.innerHTML = '';
+    table.innerHTML = '';
+    charts.hidden = !!f.table;
+    table.hidden = !f.table;
+
+    const tagFig = el('figure', 'chart');
+    tagFig.appendChild(el('figcaption', '', `By tag · ${periods.main.label}${cmp ? ` (change ${cmp.label})` : ''}`));
+    const list = el('ul', 'tag-bars');
+    if (!tags.length) list.appendChild(el('li', 'muted', 'Nothing spent in this period.'));
+    for (const t of tags) {
+      const v = tagTotals[t];
+      const li = el('li');
+      const head = el('div', 'tb-head');
+      head.append(el('span', 'tb-name', t), el('span', 'tb-amt', `${money(v)} · ${total > 0 ? Math.round((v / total) * 100) : 0}%`));
+      const track = el('div', 'tb-track');
+      const bar = el('div', 'tb-fill');
+      bar.style.width = `${Math.max(0, (v / tagMax) * 100)}%`;
+      track.appendChild(bar);
+      li.append(head, track);
+      if (cmp) {
+        const d = round2((tagNow[t] || 0) - (tagBefore[t] || 0));
+        li.appendChild(el('span', 'tb-delta', !tagBefore[t] ? `new ${cmp.label.replace(/^vs /, 'since ')}` : d === 0 ? 'no change' : `${d > 0 ? '▲' : '▼'} ${usd0(Math.abs(d))} ${cmp.label}`));
+      }
+      list.appendChild(li);
+    }
+    tagFig.appendChild(list);
+    charts.appendChild(tagFig);
+    if (names.length > 1 && total > 0) charts.appendChild(donut(`By type · ${periods.main.label}`, parts, total));
+    charts.appendChild(stackedMonths(f.year !== 'all' && f.month === 'all' ? `Month by month · ${f.year}` : 'Month by month · last 12 months', keys, spend, names, selected));
+    if (hasLastYear) {
+      const lastMonth = yoyYear === cur.slice(0, 4) ? Number(cur.slice(5, 7)) : 12;
+      charts.appendChild(yearOverYear(`Year over year · ${yoyYear} vs ${Number(yoyYear) - 1}`, yoyYear, spend, f.month !== 'all' ? f.month : '', lastMonth));
+    }
+    // Funds in the same period (income, 401(K), investments, loans, savings used).
+    if (funds.length && f.group === 'all') {
+      const ff = el('figure', 'chart');
+      ff.appendChild(el('figcaption', '', `Funds · ${periods.main.label}`));
+      const ul = el('ul', 'fund-rows');
+      for (const kind of ['Income', '401(K)', 'Investment', 'Loan payment', 'Use savings']) {
+        const v = sum(funds.filter((r) => r[1] === kind));
+        if (!v) continue;
+        const li = el('li');
+        const byWho = ['V', 'K', 'Both'].map((w) => [w, sum(funds.filter((r) => r[1] === kind && r[2] === w))]).filter(([, x]) => x);
+        li.append(el('span', '', kind === 'Use savings' ? 'Savings used' : kind), el('span', 'fr-amt', money(v)),
+          el('span', 'fr-sub', byWho.map(([w, x]) => `${w === 'Both' ? 'Joint' : w} ${usd0(x)}`).join(' · ')));
+        ul.appendChild(li);
+      }
+      ff.appendChild(ul);
+      charts.appendChild(ff);
+    }
+
+    // Table view: the same numbers as text.
+    const mk = (headers, rows) => {
+      const tb = document.createElement('table');
+      tb.className = 'data';
+      const tr = document.createElement('tr');
+      for (const h of headers) { const th = document.createElement('th'); th.textContent = h; th.scope = 'col'; tr.appendChild(th); }
+      tb.appendChild(tr);
+      for (const r of rows) {
+        const row = document.createElement('tr');
+        r.forEach((c, i) => { const td = document.createElement(i ? 'td' : 'th'); if (!i) td.scope = 'row'; td.textContent = c; row.appendChild(td); });
+        tb.appendChild(row);
+      }
+      return tb;
+    };
+    table.append(el('h3', '', `By tag · ${periods.main.label}`),
+      mk(['Tag', 'Spent', 'Share'].concat(cmp ? [cmp.short] : []), tags.map((t) => [t, money(tagTotals[t]), `${total > 0 ? Math.round((tagTotals[t] / total) * 100) : 0}%`]
+        .concat(cmp ? [money(tagBefore[t] || 0)] : []))));
+    table.append(el('h3', '', 'Month by month'),
+      mk(['Month'].concat(names.length > 1 ? names : [], ['Total']), keys.map((k) => {
+        const per = names.map((n) => sum(spend.filter((r) => r[0] === k && seriesOf(r) === n)));
+        return [ymLabelShort(k)].concat(names.length > 1 ? per.map(money) : [], [money(round2(per.reduce((x, y) => x + y, 0)))]);
+      }).reverse()));
+
+    $('anNote').textContent = 'Spending is Joint, Fixed, Personal and Sonata. Refunds lower it; budgets and settlements are not spending. ' +
+      'Change a tag from the pencil in Recent or in the Tag column of the month tab. Updates after each sync.';
+  }
+  const anChange = () => {
+    anFilter = { ...(anFilter || {}), year: $('anYear').value, month: $('anMonth').value, group: $('anGroup').value };
+    store.set('an', anFilter);
+    renderAnalytics();
+  };
+  ['anYear', 'anMonth', 'anGroup'].forEach((id) => $(id).addEventListener('change', anChange));
+  $('anTableBtn').addEventListener('click', () => {
+    anFilter = { ...(anFilter || {}), table: !(anFilter && anFilter.table) };
+    store.set('an', anFilter);
+    renderAnalytics();
+  });
 
   // ---- Goal dialog (target, deadline, investments from before tracking)
   const goalDialog = $('goalDialog');

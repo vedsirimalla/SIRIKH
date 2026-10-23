@@ -11,7 +11,7 @@
  *
  * One tab per calendar month, named like "Sirikh Oct 2026" (created automatically). Each entry goes
  * to the tab of its date's month:
- *   Date | Category | Amount ($) | Card Used | Notes | Type | Joint Left ($) | ID | Expense For
+ *   Date | Category | Amount ($) | Card Used | Notes | Type | Joint Left ($) | ID | Expense For | Tag
  * The "Sirikh" tab is an overview with one row per month, rebuilt on every save.
  *
  * Card Used is whose card paid. Expense For is whose expense it is: blank (shared) for Joint and
@@ -35,7 +35,12 @@
  * one logged before the budget was set. Joint Left ($) is the joint budget minus the joint
  * spending up to that row; the rows and colors are recalculated whenever the tab changes.
  *
- * Columns J onward of each month tab hold that month's tables (who owes whom, fixed bills,
+ * Tag says where the money went (a dropdown): Groceries, Dining out, Entertainment, Shopping and so on
+ * for Joint and Personal, the bill (Rent, Utilities...) for Fixed. A blank Tag is filled with a guess
+ * from the Category; pick another from the dropdown to change it. The app's Home charts use the tags,
+ * the Sonata categories and the Funds kinds.
+ *
+ * Columns K onward of each month tab hold that month's tables (who owes whom, fixed bills,
  * personal expenses, budgets with what is left). The script overwrites that area.
  *
  * Income, 401(K), investments, loan payments, savings and the savings goal live in the "Funds" tab:
@@ -54,9 +59,30 @@ const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
   'October', 'November', 'December'];
 const MONTH_TAB_RE = /^Sirikh (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 23;
-const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For'];
-const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8 };
+const BACKEND_VERSION = 24;
+const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For', 'Tag'];
+const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8, TAG: 9 };
+// Tags for Joint and Personal expenses (the app's dropdown). Fixed bills use their bill as the tag,
+// Sonata rows their car category and Funds rows their kind.
+const TAGS = ['Groceries', 'Dining out', 'Entertainment', 'Shopping', 'Household items', 'Subscriptions', 'Travel', 'Fuel',
+  'Transport', 'Health', 'Personal care', 'Gifts', 'Education', 'Other'];
+const FIXED_TAGS = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
+// A blank Tag (older rows, hand-typed rows) is filled with a best guess from the Category.
+const TAG_GUESSES = [
+  ['Fuel', /\b(gas|fuel|shell|exxon|bp|chevron|sunoco|wawa|sheetz|circle k|speedway)\b/],
+  ['Groceries', /\b(ht|harris teeter|costco|walmart|aldi|kroger|lidl|publix|trader joe|whole foods|food lion|wegmans|sam'?s club|grocer|patel|apna|indian store|safeway|giant|sprouts|bj'?s)\b/],
+  ['Dining out', /\b(restaurant|cafe|coffee|starbucks|dunkin|pizza|biryani|rice|chipotle|mcdonald|burger|taco|sushi|lunch|dinner|breakfast|doordash|uber ?eats|grubhub|bar|boba|tea|chai|dosa|wendy|subway|panera|chick)\b/],
+  ['Subscriptions', /\b(netflix|spotify|prime|icloud|youtube|hulu|disney|hbo|chatgpt|claude|apple music|subscription|membership|gym)\b/],
+  ['Entertainment', /\b(movie|cinema|amc|regal|concert|game|bowling|show|ticket|event|park)\b/],
+  ['Travel', /\b(flight|airline|hotel|airbnb|trip|vacation|booking|expedia|delta|united|american airlines|southwest)\b/],
+  ['Transport', /\b(uber|lyft|metro|bus|train|amtrak|parking|toll|taxi)\b/],
+  ['Health', /\b(pharmacy|cvs|walgreens|doctor|dentist|hospital|medicine|clinic|health|copay)\b/],
+  ['Personal care', /\b(salon|haircut|barber|spa|nails|sephora|ulta|cosmetic)\b/],
+  ['Household items', /\b(ikea|home depot|lowe'?s|bed bath|detergent|cleaning|furniture|kitchen|household|dollar)\b/],
+  ['Shopping', /\b(amazon|target|mall|clothes|shoes|nike|zara|h&m|best buy|apple store|shopping|tj maxx|marshalls|ross)\b/],
+  ['Gifts', /\b(gift|birthday|present|wedding)\b/],
+  ['Education', /\b(course|book|tuition|udemy|class|exam)\b/],
+];
 const TYPES = ['Joint', 'Fixed', 'Personal', 'Add funds', 'Set balance', 'Personal budget', 'Settlement'];
 const SETTLE_METHODS = ['Splitwise', 'Cash', 'Zelle', 'Venmo', 'Other'];
 // Row colors: Personal in blues by whose expense, Fixed bills in oranges by whose card (V lighter, K darker).
@@ -72,7 +98,7 @@ const MONEY = '$#,##0.00';
 // Entry amounts: a refund (negative amount) shows in green.
 const ENTRY_MONEY = '$#,##0.00;[Color10]-$#,##0.00';
 const RECENT_COUNT = 10;
-const SUMMARY_COL = 10; // column J
+const SUMMARY_COL = 11; // column K (column J until version 24, before the Tag column)
 
 function doGet() {
   return ContentService.createTextOutput('Sirikh backend is running. Version ' + BACKEND_VERSION + '.');
@@ -126,6 +152,7 @@ function doPost(e) {
       result = state_(today.slice(0, 7), touched);
       result.car = carState_(carSheet);
       result.funds = fundsState_(today, MONTHS_CACHE, carSheet);
+      result.analytics = analytics_(MONTHS_CACHE, carSheet);
       if (body.action === 'recap' && body.test) result.recapSent = sendRecap_(today);
     } finally {
       lock.releaseLock();
@@ -188,20 +215,35 @@ function monthSheet_(key, create) {
     if (!create) return null;
     sheet = ss.insertSheet(tabName_(key));
   }
-  const header = sheet.getRange(1, 1, 1, HEADERS.length);
-  if (header.getValues()[0].join('|') !== HEADERS.join('|')) {
-    header.setValues([HEADERS]).setFontWeight('bold');
-    sheet.setFrozenRows(1);
-    sheet.hideColumns(C.ID + 1);
-  }
+  upgradeMonthTab_(sheet);
   return sheet;
 }
 
-// Every month tab, oldest first.
+// Writes the header row when it is missing or old. Tabs from before version 24 kept their tables
+// from column J, where Tag now goes: those are cleared (and rewritten from K). Returns true then.
+function upgradeMonthTab_(sheet) {
+  const header = sheet.getRange(1, 1, 1, HEADERS.length);
+  const current = header.getValues()[0];
+  if (current.join('|') === HEADERS.join('|')) return false;
+  const moved = current[C.TAG] !== 'Tag' && sheet.getLastColumn() > C.FOR + 1;
+  if (moved) {
+    sheet.getRange(1, C.TAG + 1, Math.max(sheet.getLastRow(), 1), sheet.getLastColumn() - C.FOR - 1).clearContent().clearFormat();
+  }
+  header.setValues([HEADERS]).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  sheet.hideColumns(C.ID + 1);
+  // A dropdown in the Tag column; other text is still accepted (shown with a warning mark).
+  const rule = SpreadsheetApp.newDataValidation().requireValueInList(TAGS.concat(FIXED_TAGS), true).setAllowInvalid(true).build();
+  sheet.getRange(2, C.TAG + 1, Math.max(sheet.getMaxRows() - 1, 1), 1).setDataValidation(rule);
+  return moved;
+}
+
+// Every month tab, oldest first. upgraded = its layout was just brought up to date.
 function monthTabs_() {
   return SpreadsheetApp.getActiveSpreadsheet().getSheets()
     .map((s) => ({ sheet: s, key: keyOfTab_(s.getName()) }))
     .filter((t) => t.key)
+    .map((t) => Object.assign(t, { upgraded: upgradeMonthTab_(t.sheet) }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
 
@@ -266,6 +308,11 @@ function validate_(b) {
     else if (!isFunds) throw new Error('Category is required.');
     else category = type === 'Set balance' ? 'Balance set' : 'Funds added';
   }
+  // Joint and Personal take a tag from the list (a guess from the category when none is sent);
+  // a Fixed bill is its own tag.
+  let tag = '';
+  if (type === 'Joint' || type === 'Personal') tag = TAGS.indexOf(b.tag) !== -1 ? b.tag : guessTag_(category);
+  if (type === 'Fixed') tag = fixedTag_(category);
 
   return {
     id: String(b.id || Utilities.getUuid()).slice(0, 64),
@@ -277,7 +324,26 @@ function validate_(b) {
     type: type,
     expenseFor: expenseFor,
     month: month,
+    tag: tag,
   };
+}
+
+function guessTag_(category) {
+  const s = String(category || '').toLowerCase();
+  for (let i = 0; i < TAG_GUESSES.length; i++) if (TAG_GUESSES[i][1].test(s)) return TAG_GUESSES[i][0];
+  return 'Other';
+}
+function fixedTag_(category) {
+  const s = String(category || '').trim().toLowerCase().replace(/[\s-]/g, '');
+  for (let i = 0; i < FIXED_TAGS.length; i++) if (FIXED_TAGS[i].toLowerCase().replace(/[\s-]/g, '') === s) return FIXED_TAGS[i];
+  return 'Misc';
+}
+// The tag a row should show: a valid tag typed in the sheet wins, else the guess.
+function rowTag_(r, type) {
+  const typed = String(r[C.TAG] || '').trim();
+  if (type === 'Fixed') return typed ? typed : fixedTag_(r[C.CATEGORY]);
+  if (type !== 'Joint' && type !== 'Personal') return typed;
+  return typed || guessTag_(r[C.CATEGORY]);
 }
 
 // Text starting with = + - @ would be read as a formula.
@@ -296,7 +362,7 @@ function addEntry_(entry) {
   sheet.getRange(row, C.AMOUNT + 1).setNumberFormat(ENTRY_MONEY);
 }
 
-const entryRow_ = (e) => [e.date, e.category, e.amount, e.paidBy, e.notes, e.type, '', e.id, e.expenseFor];
+const entryRow_ = (e) => [e.date, e.category, e.amount, e.paidBy, e.notes, e.type, '', e.id, e.expenseFor, e.tag];
 
 // An edited entry: rewritten in place when it stays in the same month, otherwise moved to the tab
 // of its new month. Returns the month it was in before (or null if it was not found, then added).
@@ -334,7 +400,7 @@ function deleteEntry_(id) {
   return null; // already gone is fine (retried delete)
 }
 
-// First empty row under the data in A:I (the tables from column J do not count).
+// First empty row under the data in A:J (the tables from column K do not count).
 function nextRow_(sheet) {
   const rows = readRows_(sheet);
   for (let i = rows.length - 1; i >= 0; i--) if (!isEmptyRow_(rows[i])) return i + 3;
@@ -378,6 +444,7 @@ function recompute_(sheet) {
   const budget = jointBudget_(rows);
   let joint = 0;
   let changed = false;
+  let tagsChanged = false;
   rows.forEach((r) => {
     if (isEmptyRow_(r)) {
       if (r[C.BALANCE] !== '') changed = true;
@@ -390,11 +457,15 @@ function recompute_(sheet) {
     if (r[C.TYPE] !== type || r[C.BALANCE] !== left) changed = true;
     r[C.TYPE] = type;
     r[C.BALANCE] = left;
+    const tag = rowTag_(r, type);
+    if (r[C.TAG] !== tag) tagsChanged = true;
+    r[C.TAG] = tag;
   });
   if (changed) {
     sheet.getRange(2, C.TYPE + 1, rows.length, 2).setValues(rows.map((r) => [r[C.TYPE], r[C.BALANCE]]));
     sheet.getRange(2, C.BALANCE + 1, rows.length, 1).setNumberFormat(MONEY);
   }
+  if (tagsChanged) sheet.getRange(2, C.TAG + 1, rows.length, 1).setValues(rows.map((r) => [r[C.TAG]]));
   const key = keyOfTab_(sheet.getName());
   if (key) {
     labelSettlements_(sheet, rows, shares_(period_(rows, key)).owedNet,
@@ -585,10 +656,10 @@ function shares_(p) {
   return s;
 }
 
-// Columns J onward of a month tab: who owes whom (with settlements and status), fixed bills,
+// Columns K onward of a month tab: who owes whom (with settlements and status), fixed bills,
 // personal expenses, and the month's budgets with what is left, plus a color legend.
 function writeMonthSummary_(sheet, key, p, pb) {
-  const WIDTH = 5; // J:N
+  const WIDTH = 5; // K:O
   const s = shares_(p);
   const budget = round2_(p.start + p.added);
   const line = (...cells) => cells.concat(new Array(WIDTH - cells.length).fill(''));
@@ -713,7 +784,7 @@ let MONTHS_CACHE = [];
 function state_(current, touched) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const months = monthTabs_().map((t) => {
-    const hit = touched.indexOf(t.key) !== -1;
+    const hit = touched.indexOf(t.key) !== -1 || t.upgraded;
     const rows = hit ? recompute_(t.sheet) : readRows_(t.sheet);
     const p = period_(rows, t.key);
     const pb = personalBudgets_(rows, t.key);
@@ -758,8 +829,56 @@ function state_(current, touched) {
       type: normalizeType_(x.r[C.TYPE]),
       balance: x.r[C.BALANCE],
       expenseFor: ['Personal', 'Personal budget'].indexOf(normalizeType_(x.r[C.TYPE])) !== -1 ? owner_(x.r) : '',
+      tag: rowTag_(x.r, normalizeType_(x.r[C.TYPE])),
     })),
   };
+}
+
+// Spending across every month tab and the Sonata tab, summed by month, group, tag and person, for
+// the app's charts (it filters by year and month itself). Refunds count as negative spending;
+// budgets and settlements are not spending. Funds rows (income, 401(K), investments, loans,
+// savings used) come separately, by month, kind and person.
+//   spend: [month 'YYYY-MM', group (Joint, Fixed, Personal, Sonata), tag, who (V, K, Both), amount]
+//   funds: [month, kind, who, amount]
+const ANALYTICS_FUND_KINDS = ['Income', '401(K)', 'Investment', 'Loan payment', 'Use savings'];
+function analytics_(months, carSheet) {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const spend = {};
+  const add = (bucket, key, parts, amount) => {
+    if (!bucket[key]) bucket[key] = parts.concat(0);
+    bucket[key][parts.length] += amount;
+  };
+  months.forEach((m) => m.rows.forEach((r) => {
+    if (isEmptyRow_(r)) return;
+    const type = normalizeType_(r[C.TYPE]);
+    if (type !== 'Joint' && type !== 'Fixed' && type !== 'Personal') return;
+    const who = type === 'Personal' ? owner_(r) : 'Both';
+    const tag = rowTag_(r, type) || 'Other';
+    add(spend, [m.key, type, tag, who].join('|'), [m.key, type, tag, who], toNumber_(r[C.AMOUNT]));
+  }));
+  readCarRows_(carSheet).forEach((r) => {
+    if (isEmptyCarRow_(r) || String(r[K.CATEGORY]).trim() === 'Settlement') return;
+    const d = formatDate_(r[K.DATE], tz);
+    if (!/^\d{4}-\d{2}/.test(d)) return;
+    const owner = carOwner_(r);
+    const who = owner === 'V' || owner === 'K' ? owner : 'Both';
+    const tag = String(r[K.CATEGORY]).trim() || 'Misc';
+    add(spend, [d.slice(0, 7), 'Sonata', tag, who].join('|'), [d.slice(0, 7), 'Sonata', tag, who], toNumber_(r[K.AMOUNT]));
+  });
+  const funds = {};
+  readFundsRows_(fundsSheet_(false)).forEach((r) => {
+    const kind = fundKind_(r[F.KIND]);
+    const d = formatDate_(r[F.DATE], tz);
+    if (ANALYTICS_FUND_KINDS.indexOf(kind) === -1 || !/^\d{4}-\d{2}/.test(d)) return;
+    const who = String(r[F.PERSON] || 'Both');
+    add(funds, [d.slice(0, 7), kind, who].join('|'), [d.slice(0, 7), kind, who], toNumber_(r[F.AMOUNT]));
+  });
+  const done = (bucket) => Object.keys(bucket).sort().map((k) => {
+    const row = bucket[k];
+    row[row.length - 1] = round2_(row[row.length - 1]);
+    return row;
+  }).filter((row) => row[row.length - 1] !== 0);
+  return { spend: done(spend), funds: done(funds), tags: TAGS, fixedTags: FIXED_TAGS, carTags: CAR_CATEGORIES };
 }
 
 function normalizeType_(v) {

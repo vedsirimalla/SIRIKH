@@ -58,6 +58,24 @@
         <div id="hHeroNote" class="pace"></div>
       </section>
       <div id="hTiles" class="tiles"></div>
+      <section class="card" id="anCard" aria-labelledby="anTitle" hidden>
+        <div class="section-head">
+          <h2 id="anTitle">Where the money goes</h2>
+          <button type="button" id="anTableBtn" class="link-btn" aria-pressed="false">Table</button>
+        </div>
+        <div class="an-filters">
+          <label>Year<select id="anYear"></select></label>
+          <label>Month<select id="anMonth"></select></label>
+          <label>Spending<select id="anGroup"></select></label>
+        </div>
+        <div id="anEmpty" class="muted" hidden></div>
+        <div id="anBody">
+          <div class="an-kpis" id="anKpis"></div>
+          <div id="anCharts" class="charts"></div>
+          <div id="anTable" class="an-table" hidden></div>
+          <p id="anNote" class="muted an-note"></p>
+        </div>
+      </section>
       <section class="card" id="hTipsCard" aria-labelledby="hTipsTitle" hidden>
         <h2 id="hTipsTitle">Next steps</h2>
         <ul id="hTips" class="suggest"></ul>
@@ -427,6 +445,13 @@
           <input type="radio" name="fixedCat" id="fcMisc" value="Misc"><label for="fcMisc">Misc</label>
         </div>
       </div>
+
+      <label id="tagField">Tag
+        <select id="tag" aria-describedby="tagHint">
+          <option value="">Pick a tag</option>
+        </select>
+        <span id="tagHint" class="field-hint">Where the money went. Picked for you from the category; change it if it is wrong.</span>
+      </label>
 
       <label><span id="amountLabel">Amount ($)</span>
         <div class="amount">

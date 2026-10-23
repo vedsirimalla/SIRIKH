@@ -1,5 +1,5 @@
 // Network first so updates pushed to GitHub show up right away; the cache lets the app open offline.
-const CACHE = 'sirikh-v25';
+const CACHE = 'sirikh-v26';
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

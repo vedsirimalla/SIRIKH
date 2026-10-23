@@ -7,14 +7,15 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 ## Features
 
 - **Pages:** the button at the top (next to the gear) opens a menu: **Home**, **Joint**, **Fixed**, **Personal**, **Sonata**, **Funds**. The app remembers the last page.
-  - **Home** shows a summary of everything: this month's savings (or the joint budget), then tiles for the joint budget, personal budgets, who owes whom, fixed bills, Sonata, savings this month, savings from earlier months, the goal and loan payments, plus the top 3 next steps. Tap a tile to open its page. The form on Home has a small **Add** picker to log any type without leaving Home.
+  - **Home** shows a summary of everything: this month's savings (or the joint budget), then tiles for the joint budget, personal budgets, who owes whom, fixed bills, Sonata, savings this month, savings from earlier months, the goal and loan payments, plus the top 3 next steps and **Where the money goes** (below). Tap a tile to open its page. The form on Home has a small **Add** picker to log any type without leaving Home.
   - Every other page shows its own cards and a form for that type only.
-- **Entry form:** Category, Amount, Refund, Expense for, Card used, Date (calendar, defaults to today), Notes. The type comes from the page.
+- **Entry form:** Category, Tag, Amount, Refund, Expense for, Card used, Date (calendar, defaults to today), Notes. The type comes from the page.
   - **Card used:** whose card paid (V's card or K's card).
   - **Expense for:** whose expense it is. Personal: V or K. Sonata: V or K (whose turn) or Joint. Joint and Fixed are always shared.
   - **Owed in full:** a one-person expense on the other person's card is owed back in full. Example: K orders ramen for herself and it goes on V's card, so K owes V the whole amount. The app shows this before you save.
-  - **Joint and Personal:** Category is a plain typing field (no dropdown).
-  - **Fixed:** Category is replaced by buttons for exactly five bills: Rent, Utilities, Electricity, Wi-Fi, Misc.
+  - **Joint and Personal:** Category is a plain typing field (no dropdown). **Tag** is a dropdown that says where the money went: Groceries, Dining out, Entertainment, Shopping, Household items, Subscriptions, Travel, Fuel, Transport, Health, Personal care, Gifts, Education, Other. It is picked for you as you type the Category (Costco: Groceries, Netflix: Subscriptions); change it if it is wrong, and the app remembers your choice for that Category next time.
+  - **Fixed:** Category is replaced by buttons for exactly five bills: Rent, Utilities, Electricity, Wi-Fi, Misc. The bill is also its tag.
+  - **Sonata and Funds** keep their own options as tags: the car category (Fuel, Servicing, Repairs...) and the Funds kind (Income, 401(K), Investment, Loan payment, Savings used).
   - The text under Type explains the selected type.
   - **Refund:** tick it for money back (a return, a price adjustment, a bill credit). It is saved as a negative amount, so it undoes the original expense everywhere: the budget goes back up, spending goes down, and what is owed goes down. Works for Joint, Fixed, Personal and Sonata (not fuel fill-ups or Funds). Typing a minus sign works too. Refunds show in green with the word "refund" in Recent and in green in the sheet.
 - **Budgets by page:** the budget card follows the page.
@@ -35,6 +36,15 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
 - **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total, and who owes whom for fixed bills.
 - **Sonata (car):** the fourth Type option. Car costs and fuel go to their own **Sonata** tab. V and K take turns paying (V three tanks, K the fourth), so own turns owe nothing; Joint costs split 50/50. See "Sonata tab" below.
 - **Funds:** what comes in and what goes out: income, 401(K), investments, loan payments, savings, a savings goal, a payday plan and an optional weekly email. Kept in its own **Funds** tab, with two generated tabs: **Loans** and **VK**. See "Funds tab" below.
+- **Where the money goes (Home):** spending analytics for any period.
+  - **Filters:** Year (or All years), Month (or Whole year / All months) and Spending (All, Joint, Fixed, Personal, Personal V, Personal K, Sonata).
+  - **Headline:** total spent, compared with the month before and the same month last year (a whole year is compared with the same months of last year, only months logged in both years), spending per day or per month, and income with the share of it spent.
+  - **By tag:** every tag ranked, with its amount, share of the total and change against the comparison period.
+  - **By type:** a donut of Joint, Fixed, Personal V, Personal K and Sonata, total in the middle.
+  - **Month by month:** stacked columns by type for the last 12 months (or the chosen year), the chosen month outlined.
+  - **Year over year:** this year and last year side by side, month by month (shown once there is data from last year).
+  - **Funds:** income, 401(K), investments, loan payments and savings used in the period, by person.
+  - Tap a slice or a column to read its numbers. **Table** shows the same numbers as tables. Spending is Joint, Fixed, Personal and Sonata; refunds lower it; budgets and settlements are not spending. Charts update after each sync.
 - **Color coding** (in the app and the sheet):
 
   | Type | Color |
@@ -156,22 +166,23 @@ The app never uses the Google Sheets URL. It talks to the **Apps Script web app*
 
 Each calendar month has its own tab, named like **Sirikh Oct 2026**, created automatically the first time an entry is dated in that month. An entry always goes to the tab of its date's month (an October receipt logged in November goes to October).
 
-| Date | Category | Amount ($) | Card Used | Notes | Type | Joint Left ($) | ID (hidden) | Expense For |
-|---|---|---|---|---|---|---|---|---|
-| 2026-10-03 | Costco | $40.00 | V | | Joint | $560.00 | | |
-| 2026-10-05 | Walmart | $60.00 | K | | Joint | $500.00 | | |
-| 2026-10-10 | Balance set | $600.00 | Both | October budget | Set balance | $500.00 | | |
-| 2026-10-12 | Haircut | $20.00 | V | | Personal | $500.00 | | V |
+| Date | Category | Amount ($) | Card Used | Notes | Type | Joint Left ($) | ID (hidden) | Expense For | Tag |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-03 | Costco | $40.00 | V | | Joint | $560.00 | | | Groceries |
+| 2026-10-05 | Walmart | $60.00 | K | | Joint | $500.00 | | | Household items |
+| 2026-10-10 | Balance set | $600.00 | Both | October budget | Set balance | $500.00 | | | |
+| 2026-10-12 | Haircut | $20.00 | V | | Personal | $500.00 | | V | Personal care |
 
 - **Budgets are per calendar month and reset on the 1st.** Nothing carries over.
 - **Set it any time:** the latest Set balance row in a month is that month's joint budget, and every Joint expense dated in the month counts against it, even ones logged before it (the Costco row above). The same goes for Personal budget rows and each person's Personal expenses.
 - **Joint Left ($)** = the month's joint budget minus joint spending up to that row. Blank until a budget is set for the month.
 - **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance`, `Personal budget`, `Settlement` (or `Add funds` typed by hand). Blank counts as Joint.
 - **Expense For** is filled for Personal rows (V or K). Rows without it count as the card owner's.
+- **Tag** (a dropdown in the sheet too) is filled for Joint, Personal and Fixed rows. A blank Tag, such as on rows from before version 24 or rows typed by hand, is filled with a guess from the Category (anything unknown becomes Other). Pick another tag from the dropdown to change it; the charts follow.
 - **Row colors** come from Type, Expense For and Card Used, and update after hand edits.
 - **ID** prevents duplicates and identifies rows to delete. Do not edit it.
 
-**Tables in each month tab (column J onward)**, rebuilt on every save:
+**Tables in each month tab (column K onward)**, rebuilt on every save:
 
 1. **Who owes whom** for the month: V paid, K paid, Total; V's share, K's share, Equal split; Settle up (joint); Personal on other's card; Overall (joint + fixed + personal); **Settled**; **Status** (green Cleared or amber Open).
 2. **Fixed bills:** V paid, K paid, Total, Settle up.
@@ -179,7 +190,7 @@ Each calendar month has its own tab, named like **Sirikh Oct 2026**, created aut
 4. **Budgets for the month:** Budget, Spent and **Left** for Joint, V personal and K personal.
 5. **Colors:** a legend of the row colors.
 
-Do not type in columns J onward; the script overwrites them.
+Do not type in columns K onward; the script overwrites them. (Before version 24 the tables started at column J; version 24 clears that area once, adds Tag in J and writes the tables from K.)
 
 ## Sirikh tab (overview)
 
@@ -300,9 +311,10 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal, Sonata or Funds entries, or edits, stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 23" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal, Sonata or Funds entries, or edits, stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 24" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |
+| No charts on Home, or "Charts need the Apps Script at version 24" | Paste the latest `Code.gs` and deploy a New version, then open the app online once. Entries with a tag wait on the phone (hourglass) until then. |
 | Old home screen icon | Remove it and add it again from Safari. |
 | Weekly email: "You do not have permission" or no email | In Apps Script, select `weeklyRecap`, click Run and approve the permissions. Then save the weekly email again in the app. Check the spam folder for the first one. |
