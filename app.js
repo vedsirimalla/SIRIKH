@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 28; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 30; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Mobile bill', 'Misc'];
   // Tags for Joint and Personal expenses (same list as Code.gs). Fixed bills are their own tag.
