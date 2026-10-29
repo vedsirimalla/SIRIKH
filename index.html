@@ -172,10 +172,14 @@
         <tbody>
           <tr><th scope="col">V paid</th><th scope="col">K paid</th><th scope="col">Total</th></tr>
           <tr><td id="fixedV"></td><td id="fixedK"></td><td id="fixedTotal"></td></tr>
+          <tr><th scope="col">Shared</th><th scope="col">V's own</th><th scope="col">K's own</th></tr>
+          <tr><td id="fixedShared"></td><td id="fixedOwnV"></td><td id="fixedOwnK"></td></tr>
+          <tr><th scope="col">V's fixed</th><th scope="col">K's fixed</th><th scope="col"></th></tr>
+          <tr><td id="fixedEachV"></td><td id="fixedEachK"></td><td></td></tr>
         </tbody>
       </table>
       <div id="fixedSettle" class="settle"></div>
-      <div class="muted">Tracked separately. Not taken from the monthly budget.</div>
+      <div class="muted">Tracked separately. Not taken from the monthly budget. Shared bills split 50/50; V's and K's own bills (mobile lines) are theirs alone. Each person's fixed = half the shared bills + their own.</div>
     </section>
     </div>
 
@@ -299,8 +303,26 @@
           <div id="mGoalPace" class="status"></div>
           <ul id="mSuggest" class="suggest"></ul>
         </div>
-        <div id="mGoalEmpty" class="pace">Set a target and a deadline. Investments (401(K), India, USA...) count toward it, split equally between V and K. Savings count once you invest them.</div>
+        <div id="mGoalEmpty" class="pace">Set a target and a deadline. Investments (401(K), India, USA...) count toward it, split equally between V and K. Savings count once you invest them. Fam does not count.</div>
         <div class="row"><button type="button" id="goalBtn" class="full">Set goal</button></div>
+      </section>
+
+      <section class="card fam-card" aria-labelledby="mFamTitle">
+        <div id="mFamTitle" class="eyebrow">Fam (family investment)</div>
+        <div class="left-line">
+          <span id="mFam" class="balance-amount">—</span>
+          <span class="left-word">this month</span>
+        </div>
+        <div class="stats">
+          <div><span class="stat-label">V</span><span id="mFamV">—</span></div>
+          <div><span class="stat-label">K</span><span id="mFamK">—</span></div>
+          <div><span class="stat-label">So far</span><span id="mFamAll">—</span></div>
+        </div>
+        <table class="split money-table" id="mFamTable" hidden>
+          <thead><tr><th scope="col">Account</th><th scope="col">This month</th><th scope="col">Total</th><th scope="col">V / K</th></tr></thead>
+          <tbody id="mFams"></tbody>
+        </table>
+        <div id="mFamNote" class="muted"></div>
       </section>
 
       <section class="card loan-card" aria-labelledby="mLoansTitle">
@@ -318,7 +340,7 @@
           <span class="muted">Total</span>
         </div>
         <table class="split history-table">
-          <thead><tr><th scope="col">Month</th><th scope="col">Income</th><th scope="col">Spent</th><th scope="col">Invested</th><th scope="col">Savings</th></tr></thead>
+          <thead><tr><th scope="col">Month</th><th scope="col">Income</th><th scope="col">Spent</th><th scope="col">Invested</th><th scope="col">Fam</th><th scope="col">Savings</th></tr></thead>
           <tbody id="mHistory"></tbody>
         </table>
       </section>
@@ -413,6 +435,8 @@
             <label for="mk401">401(K)</label>
             <input type="radio" name="moneyKind" id="mkInvest" value="Investment">
             <label for="mkInvest">Invest</label>
+            <input type="radio" name="moneyKind" id="mkFam" value="Fam">
+            <label for="mkFam">Fam</label>
             <input type="radio" name="moneyKind" id="mkLoan" value="Loan payment">
             <label for="mkLoan">Loan</label>
             <input type="radio" name="moneyKind" id="mkSavings" value="Use savings">
@@ -442,6 +466,7 @@
           <input type="radio" name="fixedCat" id="fcUtilities" value="Utilities"><label for="fcUtilities">Utilities</label>
           <input type="radio" name="fixedCat" id="fcElectricity" value="Electricity"><label for="fcElectricity">Electricity</label>
           <input type="radio" name="fixedCat" id="fcWifi" value="Wi-Fi"><label for="fcWifi">Wi-Fi</label>
+          <input type="radio" name="fixedCat" id="fcMobile" value="Mobile bill"><label for="fcMobile">Mobile bill</label>
           <input type="radio" name="fixedCat" id="fcMisc" value="Misc"><label for="fcMisc">Misc</label>
         </div>
       </div>
@@ -450,7 +475,10 @@
         <select id="tag" aria-describedby="tagHint">
           <option value="">Pick a tag</option>
         </select>
-        <span id="tagHint" class="field-hint">Where the money went. Picked for you from the category; change it if it is wrong.</span>
+        <span id="tagHint" class="field-hint">Where the money went. Picked for you from the category; change it if it is wrong. Pick Other to make your own tag.</span>
+      </label>
+      <label id="tagNewField" hidden>Your own tag (optional)
+        <input type="text" id="tagNew" maxlength="30" placeholder="Pet care, Baby, Car loan… (blank = Other)" autocapitalize="words" autocomplete="off">
       </label>
 
       <label><span id="amountLabel">Amount ($)</span>
@@ -490,10 +518,11 @@
 
     <section class="card">
       <div class="section-head">
-        <h2>Recent</h2>
+        <h2 id="recentTitle">Recent</h2>
         <span id="syncNote" class="muted"></span>
       </div>
       <ul id="recentList" class="recent"></ul>
+      <div class="row"><button type="button" id="moreBtn" class="full" hidden>Show more</button></div>
     </section>
     <p id="appVersion" class="app-version"></p>
   </main>

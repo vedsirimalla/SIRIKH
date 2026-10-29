@@ -2,17 +2,18 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 26; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 27; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
-  const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
+  const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Mobile bill', 'Misc'];
   // Tags for Joint and Personal expenses (same list as Code.gs). Fixed bills are their own tag.
   const TAGS = ['Groceries', 'Dining out', 'Entertainment', 'Shopping', 'Household items', 'Subscriptions', 'Travel', 'Fuel',
-    'Transport', 'Health', 'Personal care', 'Gifts', 'Education', 'Other'];
+    'Transport', 'Health', 'Personal care', 'Gifts', 'Education', 'Bills', 'Other'];
   // A first guess from the category (same rules as Code.gs); a tag picked for a category is remembered.
   const TAG_GUESSES = [
     ['Fuel', /\b(gas|fuel|shell|exxon|bp|chevron|sunoco|wawa|sheetz|circle k|speedway)\b/],
     ['Groceries', /\b(ht|harris teeter|costco|walmart|aldi|kroger|lidl|publix|trader joe|whole foods|food lion|wegmans|sam'?s club|grocer|patel|apna|indian store|safeway|giant|sprouts|bj'?s)\b/],
     ['Dining out', /\b(restaurant|cafe|coffee|starbucks|dunkin|pizza|biryani|rice|chipotle|mcdonald|burger|taco|sushi|lunch|dinner|breakfast|doordash|uber ?eats|grubhub|bar|boba|tea|chai|dosa|wendy|subway|panera|chick)\b/],
+    ['Bills', /\b(bill|bills|insurance|verizon|t-mobile|at&t|xfinity|spectrum|duke energy)\b/],
     ['Subscriptions', /\b(netflix|spotify|prime|icloud|youtube|hulu|disney|hbo|chatgpt|claude|apple music|subscription|membership|gym)\b/],
     ['Entertainment', /\b(movie|cinema|amc|regal|concert|game|bowling|show|ticket|event|park)\b/],
     ['Travel', /\b(flight|airline|hotel|airbnb|trip|vacation|booking|expedia|delta|united|american airlines|southwest)\b/],
@@ -27,10 +28,10 @@
   const TYPE_LABELS = { 'Joint': 'Joint', 'Fixed': 'Fixed', 'Personal': 'Personal', 'Car': 'Sonata', 'Add funds': 'Funds added', 'Set balance': 'Budget set', 'Personal budget': 'Budget set', 'Settlement': 'Settled' };
   const TYPE_HINTS = {
     Joint: 'Joint: shared day-to-day spending. Comes out of the monthly budget and counts in who owes whom.',
-    Fixed: 'Fixed: a monthly bill. Pick Rent, Utilities, Electricity, Wi-Fi or Misc. Not taken from the monthly budget; tracked under Fixed bills.',
+    Fixed: "Fixed: a monthly bill (Rent, Utilities, Electricity, Wi-Fi, Mobile bill, Misc). Expense for: Both splits it 50/50; V or K is that person's own bill (each mobile line), owed in full if it goes on the other's card. Not taken from the monthly budget.",
     Personal: "Personal: one person's own expense, not in the budget. If it goes on the other person's card, they are owed the full amount.",
     Car: "Sonata: car costs and fuel, saved to the Sonata tab. Expense for: whose turn it is (V or K), or Joint to split 50/50.",
-    Funds: 'Funds: what comes in and what goes out (income, 401(K), investments, loan payments, savings), saved to the Funds tab with its overview.',
+    Funds: 'Funds: what comes in and what goes out (income, 401(K), investments, Fam, loan payments, savings), saved to the Funds tab with its overview.',
   };
 
   // Matches the row colors in the sheet: Personal blues and Fixed oranges, lighter for V, darker for K.
@@ -46,9 +47,11 @@
   // Fixed bills need version 7 (older scripts save them as Joint). Sonata entries and Personal
   // expenses need version 9, which stores whose expense it is separately from whose card paid.
   const requiredVersion = (op) => {
+    // version 25: Fixed bills for one person (Expense for V or K), Mobile bill, custom tags
+    if (op.op !== 'delete' && !op.table && op.entry && op.entry.type === 'Fixed' && (op.entry.expenseFor === 'V' || op.entry.expenseFor === 'K' || op.entry.category === 'Mobile bill')) return 25;
     if (op.op !== 'delete' && !op.table && op.entry && op.entry.tag) return 24; // tags (version 24 adds the Tag column)
     if (op.op === 'update') return 23; // editing an entry
-    if (op.table === 'funds') return op.op === 'add' && op.entry.kind === '401(K)' ? 21 : 20;
+    if (op.table === 'funds') return op.op !== 'delete' && op.entry.kind === 'Fam' ? 25 : op.op === 'add' && op.entry.kind === '401(K)' ? 21 : 20;
     if (op.table === 'car') return op.op !== 'add' ? 9 : op.entry.category === 'Settlement' ? 18 : 15;
     if (op.op !== 'add') return 0;
     if (op.entry.type === 'Settlement') return 18;
@@ -83,6 +86,27 @@
   // entry out and putting the new one in.
   const pendingOps = () => getQueue().flatMap((op) => (op.op === 'update' ? [{ ...op, op: 'delete', id: op.entry.id }, { ...op, op: 'add' }] : [op]));
   let editing = null; // the Recent entry being edited: { id, table }
+
+  // Older rows loaded with "Show more", per list ('main|Joint', 'car|All', 'funds|All'...). Kept only
+  // in memory: cleared whenever the sheet changes, so they are never stale.
+  let loadedMore = {};
+  // Which rows each page's Recent shows (same as RECENT_GROUPS in Code.gs). Home shows everything.
+  const RECENT_GROUPS = {
+    Joint: ['Joint', 'Set balance', 'Add funds', 'Settlement'],
+    Fixed: ['Fixed'],
+    Personal: ['Personal', 'Personal budget', 'Settlement'],
+  };
+  // Every row this phone knows for a table (latest lists plus older rows loaded), to undo an edit or
+  // delete in the live numbers before it syncs.
+  function findRow(table, id) {
+    const st = getState() || {};
+    const lists = table === 'car' ? [(st.car && st.car.recent) || []]
+      : table === 'funds' ? [(st.funds && st.funds.recent) || []]
+        : [st.recent || [], ...Object.values(st.recentBy || {})];
+    for (const [key, rows] of Object.entries(loadedMore)) if (key.startsWith((table || 'main') + '|')) lists.push(rows);
+    for (const rows of lists) { const hit = rows.find((r) => r.id === id); if (hit) return hit; }
+    return undefined;
+  }
 
   // ---------- Helpers
   function today() {
@@ -144,6 +168,18 @@
     return 0;
   }
 
+  // Fixed bills: shared ones split 50/50, each person's own bill (a mobile line) owed in full when it
+  // goes on the other's card. Positive fvShare = K owes V. Older sheets send no split: all shared.
+  function fixedShares(p) {
+    const shared = p.fShared === undefined ? p.fixed : p.fShared;
+    const sv = p.fsv === undefined ? p.fv : p.fsv;
+    const sk = p.fsk === undefined ? p.fk : p.fsk;
+    const split = round2(shared / 2);
+    const owed = p.fixedOwed || 0;
+    return { shared: round2(shared), fvShare: round2(sv - split + owed), fkShare: round2(sk - split - owed),
+      ownV: round2(p.fOwnV || 0), ownK: round2(p.fOwnK || 0), fixedV: round2(split + (p.fOwnV || 0)), fixedK: round2(split + (p.fOwnK || 0)) };
+  }
+
   // Sonata: own turns owe nothing, Joint splits 50/50, a turn on the other's card is owed in full.
   function carOwed(owner, card, amount) {
     if (owner === 'Joint') return card === 'V' ? amount / 2 : card === 'K' ? -amount / 2 : 0;
@@ -165,9 +201,10 @@
   function estimate() {
     const state = stateForMonth();
     const month = currentMonth();
-    const recent = (getState() || {}).recent || [];
     const p = { month, since: month + '-01', start: 0, added: 0, spent: 0, v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0,
       kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0, ...(state && state.period) };
+    // Sheets older than version 25 do not split Fixed bills: treat them all as shared.
+    if (p.fShared === undefined) Object.assign(p, { fShared: p.fixed, fsv: p.fv, fsk: p.fk, fOwnV: 0, fOwnK: 0, fixedOwed: 0 });
     let hasBalance = state ? !!state.hasBalance : false;
     const sameMonth = (e) => e && String(e.month || e.date).slice(0, 7) === month;
 
@@ -187,6 +224,15 @@
         p.fixed += amt;
         if (e.paidBy === 'V') p.fv += amt;
         if (e.paidBy === 'K') p.fk += amt;
+        const who = e.expenseFor === 'V' || e.expenseFor === 'K' ? e.expenseFor : 'Both';
+        if (who === 'Both') {
+          p.fShared += amt;
+          if (e.paidBy === 'V') p.fsv += amt;
+          if (e.paidBy === 'K') p.fsk += amt;
+        } else {
+          p['fOwn' + who] += amt;
+          p.fixedOwed += owedInFull(who, e.paidBy, amt);
+        }
       }
       if (e.type === 'Personal') {
         const owner = e.expenseFor || e.paidBy;
@@ -203,11 +249,11 @@
         if (op.entry.type === 'Set balance') { p.start = op.entry.amount; hasBalance = true; }
         else apply(op.entry, 1);
       } else {
-        const e = recent.find((r) => r.id === op.id);
+        const e = findRow('main', op.id);
         if (sameMonth(e)) apply(e, -1);
       }
     }
-    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'personal', 'kOnK', 'kOnV', 'vOnV', 'vOnK', 'settled', 'settledNet']) p[k] = round2(p[k] || 0);
+    for (const k of ['start', 'added', 'spent', 'v', 'k', 'fixed', 'fv', 'fk', 'fShared', 'fsv', 'fsk', 'fOwnV', 'fOwnK', 'fixedOwed', 'personal', 'kOnK', 'kOnV', 'vOnV', 'vOnK', 'settled', 'settledNet']) p[k] = round2(p[k] || 0);
     const balance = hasBalance ? round2(p.start + p.added - p.spent) : 0;
     return { balance, hasBalance, unsynced: getQueue().length, period: p };
   }
@@ -309,9 +355,8 @@
     $('splitSince').textContent = 'Since ' + prettyDate(p.since);
     $('settleLine').textContent = settleText(vShare, kShare);
 
-    const fSplit = round2(p.fixed / 2);
-    const fvShare = round2(p.fv - fSplit);
-    const fkShare = round2(p.fk - fSplit);
+    const fx = fixedShares(p);
+    const { fvShare, fkShare } = fx;
     const hasFixed = p.fixed !== 0 || p.fv !== 0 || p.fk !== 0;
     const pn = round2(p.personal || 0);
     const overall = 'Overall (joint + fixed + personal): ' + settleText(round2(vShare + fvShare + pn), round2(kShare + fkShare - pn));
@@ -337,6 +382,11 @@
     $('fixedV').textContent = money(p.fv);
     $('fixedK').textContent = money(p.fk);
     $('fixedTotal').textContent = money(p.fixed);
+    $('fixedShared').textContent = money(fx.shared);
+    $('fixedOwnV').textContent = money(fx.ownV);
+    $('fixedOwnK').textContent = money(fx.ownK);
+    $('fixedEachV').textContent = money(fx.fixedV);
+    $('fixedEachK').textContent = money(fx.fixedK);
     $('fixedSettle').textContent = settleText(fvShare, fkShare);
   }
 
@@ -405,16 +455,76 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNav(); });
   $('typeSeg').addEventListener('change', () => { if (view === 'Home') store.set('quickType', selectedType()); });
 
+  // What the Recent list on this page shows: its table, its group (Joint, Fixed, Personal, or All on
+  // Home), the latest rows from the sheet, how many the sheet has in all, and older rows loaded.
+  function recentSource() {
+    const st = getState() || {};
+    if (isMoneyMode()) {
+      const f = st.funds || {};
+      return { table: 'funds', group: 'All', saved: f.recent || [], total: f.recentTotal };
+    }
+    if (isCarMode()) {
+      const c = st.car || {};
+      return { table: 'car', group: 'All', saved: c.recent || [], total: c.recentTotal };
+    }
+    const group = RECENT_GROUPS[view] ? view : 'All';
+    const inGroup = (r) => group === 'All' || RECENT_GROUPS[group].includes(r.type || 'Joint');
+    const saved = group === 'All' ? st.recent || [] : st.recentBy ? st.recentBy[group] || [] : (st.recent || []).filter(inGroup);
+    return { table: 'main', group, inGroup, saved, total: st.recentTotal ? st.recentTotal[group] : undefined };
+  }
+
+  // Pending changes first, then the sheet's latest rows, then older rows loaded with Show more.
+  function recentRows(src) {
+    const queue = pendingOps().filter((op) => (op.table || 'main') === src.table);
+    const deleting = new Set(queue.filter((op) => op.op === 'delete').map((op) => op.id));
+    const pending = queue.filter((op) => op.op === 'add' && (!src.inGroup || src.inGroup(op.entry)))
+      .map((op) => ({ ...op.entry, pending: true })).reverse();
+    const more = loadedMore[`${src.table}|${src.group}`] || [];
+    const seen = new Set();
+    const saved = [...src.saved, ...more].filter((r) => {
+      if (deleting.has(r.id) || seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
+    return [...pending, ...saved];
+  }
+
+  // "Show more": the next page of older rows from the sheet (needs a connection).
+  function renderMoreButton(src) {
+    const btn = $('moreBtn');
+    const loaded = src.saved.length + (loadedMore[`${src.table}|${src.group}`] || []).length;
+    const left = src.total === undefined ? 0 : src.total - loaded;
+    btn.hidden = left <= 0;
+    btn.textContent = left > 0 ? `Show more (${left} older)` : '';
+    btn.dataset.key = `${src.table}|${src.group}`;
+    $('recentTitle').textContent = view === 'Home' ? 'Recent' : `Recent ${VIEW_LABELS[view]}`;
+  }
+  let loadingMore = false;
+  $('moreBtn').addEventListener('click', async () => {
+    if (loadingMore) return;
+    const src = recentSource();
+    const key = `${src.table}|${src.group}`;
+    const have = loadedMore[key] || [];
+    loadingMore = true;
+    $('moreBtn').textContent = 'Loading…';
+    try {
+      const data = await call({ action: 'list', table: src.table, group: src.group, offset: src.saved.length + have.length, limit: 25 });
+      saveState(data);
+      if (data.list && data.list.rows) loadedMore[key] = have.concat(data.list.rows);
+    } catch (err) {
+      showBanner(err.kind === 'network' ? 'Connect to the internet to load older entries.' : err.message, 'err', true);
+    } finally {
+      loadingMore = false;
+      render();
+    }
+  });
+
   function renderRecent() {
     if (isMoneyMode()) return renderMoneyRecent();
-    const state = getState();
     const isCar = isCarMode();
-    const queue = pendingOps().filter((op) => (op.table || 'main') === (isCar ? 'car' : 'main'));
-    const deleting = new Set(queue.filter((op) => op.op === 'delete').map((op) => op.id));
-    const pending = queue.filter((op) => op.op === 'add').map((op) => ({ ...op.entry, pending: true })).reverse();
-    const source = state ? (isCar ? (state.car && state.car.recent) || [] : state.recent || []) : [];
-    const saved = source.filter((r) => !deleting.has(r.id));
-    const rows = [...pending, ...saved];
+    const src = recentSource();
+    const rows = recentRows(src);
+    renderMoreButton(src);
 
     const list = $('recentList');
     list.innerHTML = '';
@@ -453,7 +563,8 @@
       if (refundRow) parts.push('refund');
       if (isSettlement) parts.push(`${r.paidBy} paid ${r.paidBy === 'V' ? 'K' : 'V'}`);
       else if (isCar && r.expenseFor === 'Joint') parts.push('Joint');
-      else if (owner && (r.type === 'Personal' || (isCar && owner !== r.paidBy))) parts.push(`for ${owner}`);
+      else if (owner && (r.type === 'Personal' || r.type === 'Fixed' || (isCar && owner !== r.paidBy))) parts.push(`for ${owner}`);
+      else if (r.type === 'Fixed') parts.push('shared');
       if (isSettlement) { /* who paid whom is already shown */ }
       else if (r.paidBy === 'V' || r.paidBy === 'K') parts.push(`${r.paidBy}'s card`);
       else if (r.paidBy) parts.push(`by ${r.paidBy}`);
@@ -500,6 +611,7 @@
     $('moneyDash').hidden = !isMoney;
     $('homeDash').hidden = !isHome;
     $('typeField').hidden = !isHome;
+    fillTags(); // tags of your own learned from the sheet
     renderBalance();
     renderPersonalBudgets();
     renderMonthPrompt();
@@ -520,7 +632,6 @@
   // What the sheet reported, plus changes not synced yet.
   function estimatePersonal() {
     const st = stateForMonth();
-    const recent = (getState() || {}).recent || [];
     const pb = { V: null, K: null };
     for (const who of ['V', 'K']) {
       const b = st && st.personalBudgets && st.personalBudgets[who];
@@ -540,7 +651,8 @@
         const b = pb[op.entry.expenseFor || op.entry.paidBy];
         if (inMonth(b, op.entry.date)) b.spent += op.entry.amount;
       } else if (op.op === 'delete') {
-        const e = recent.find((r) => r.id === op.id && r.type === 'Personal');
+        const e0 = findRow('main', op.id);
+        const e = e0 && e0.type === 'Personal' ? e0 : undefined;
         const b = e && pb[e.expenseFor || e.paidBy];
         if (inMonth(b, e && e.date)) b.spent -= e.amount;
       }
@@ -607,8 +719,8 @@
     }
     if (month === currentMonth()) {
       const p = estimate().period;
-      const split = round2(p.spent / 2), fSplit = round2(p.fixed / 2);
-      return round2((p.v - split) + (p.fv - fSplit) + (p.personal || 0) - (p.settledNet || 0));
+      const split = round2(p.spent / 2);
+      return round2((p.v - split) + fixedShares(p).fvShare + (p.personal || 0) - (p.settledNet || 0));
     }
     const u = (((getState() || {}).unsettled) || []).find((x) => x.month === month);
     let r = u ? u.remaining : 0;
@@ -751,9 +863,8 @@
 
   // Sonata changes not synced yet, each with +1 (added) or -1 (deleted, or the old side of an edit).
   function carChanges() {
-    const recent = ((getState() || {}).car || {}).recent || [];
     return pendingOps().filter((op) => op.table === 'car').map((op) => (op.op === 'add'
-      ? { e: op.entry, sign: 1 } : { e: recent.find((r) => r.id === op.id), sign: -1 })).filter((x) => x.e);
+      ? { e: op.entry, sign: 1 } : { e: findRow('car', op.id), sign: -1 })).filter((x) => x.e);
   }
 
   // Highest odometer known, including fill-ups still waiting to sync.
@@ -1004,6 +1115,8 @@
       hasBalance: data.hasBalance,
       period: data.period,
       recent: data.recent || [],
+      recentBy: data.recentBy || null,
+      recentTotal: data.recentTotal || null,
       version: data.version || 0,
       car: data.car || null,
       personalBudgets: data.personalBudgets || null,
@@ -1045,6 +1158,7 @@
             : { action: op.op, table: op.table, entry: op.entry });
           saveState(data);
           sent = true;
+          loadedMore = {}; // the sheet changed: older rows are loaded again when asked
         } catch (err) {
           if (err.kind !== 'server') throw err;
           // The sheet refused this change (bad data); drop it so it does not block the rest.
@@ -1095,17 +1209,55 @@
 
   // ---------- Tags
   let tagPicked = false; // true once the tag was chosen by hand (then typing the category leaves it alone)
-  for (const t of TAGS) {
-    const opt = document.createElement('option');
-    opt.value = t;
-    opt.textContent = t;
-    $('tag').appendChild(opt);
+  // Tags of your own: made by picking Other and typing a name. Saved on this phone and learned back
+  // from the sheet, so both phones offer them.
+  const cleanTag = (v) => {
+    const t = String(v || '').replace(/\s+/g, ' ').trim().slice(0, 30);
+    if (!t || /^[=+\-@]/.test(t)) return '';
+    const known = allTags().find((x) => x.toLowerCase() === t.toLowerCase());
+    return known || t.charAt(0).toUpperCase() + t.slice(1);
+  };
+  function customTags() {
+    const fromSheet = (((getState() || {}).analytics) || {}).customTags || [];
+    const out = [];
+    for (const t of [...store.get('customTags', []), ...fromSheet]) if (t && !TAGS.includes(t) && !out.includes(t)) out.push(t);
+    return out;
+  }
+  // Standard tags, then your own, with Other last.
+  const allTags = () => [...TAGS.filter((t) => t !== 'Other'), ...customTags(), 'Other'];
+  let tagList = '';
+  function fillTags() {
+    const tags = allTags();
+    if (tags.join('|') === tagList) return;
+    tagList = tags.join('|');
+    const select = $('tag');
+    const keep = select.value;
+    select.length = 1; // keep "Pick a tag"
+    for (const t of tags) select.add(new Option(t === 'Other' ? 'Other (make your own…)' : t, t));
+    select.value = tags.includes(keep) ? keep : keep ? 'Other' : '';
+  }
+  function addCustomTag(t) {
+    if (!t || TAGS.includes(t)) return;
+    const mine = store.get('customTags', []);
+    if (!mine.includes(t)) store.set('customTags', [...mine, t]);
+    fillTags();
+  }
+  fillTags();
+  function updateTagNew() {
+    const show = !$('tagField').hidden && $('tag').value === 'Other';
+    $('tagNewField').hidden = !show;
+    if (!show) $('tagNew').value = '';
+  }
+  // The tag to save: a new tag of your own when one is typed under Other.
+  function chosenTag() {
+    if ($('tag').value !== 'Other') return $('tag').value;
+    return cleanTag($('tagNew').value) || 'Other';
   }
   function suggestTag(category) {
     const c = String(category || '').trim().toLowerCase();
     if (!c) return '';
     const known = store.get('tagMemory', {})[c];
-    if (TAGS.includes(known)) return known;
+    if (allTags().includes(known)) return known;
     const hit = TAG_GUESSES.find(([, re]) => re.test(c));
     return hit ? hit[0] : 'Other';
   }
@@ -1116,8 +1268,13 @@
     if (keys.length > 300) delete memory[keys[0]];
     store.set('tagMemory', memory);
   }
-  $('category').addEventListener('input', () => { if (!tagPicked) $('tag').value = suggestTag($('category').value); });
-  $('tag').addEventListener('change', () => { tagPicked = !!$('tag').value; $('tag').classList.remove('invalid'); });
+  $('category').addEventListener('input', () => { if (!tagPicked) { $('tag').value = suggestTag($('category').value); updateTagNew(); } });
+  $('tag').addEventListener('change', () => {
+    tagPicked = !!$('tag').value;
+    $('tag').classList.remove('invalid');
+    updateTagNew();
+    if ($('tag').value === 'Other') $('tagNew').focus();
+  });
 
   // Shows the description for the selected type, and swaps the Category typing field
   // for the fixed bill buttons when Fixed is selected.
@@ -1131,6 +1288,8 @@
     $('fixedPicker').hidden = !fixed;
     $('categoryField').hidden = car || moneyType;
     $('tagField').hidden = !(type === 'Joint' || type === 'Personal');
+    fillTags();
+    updateTagNew();
     $('carFields').hidden = !car;
     $('moneyFields').hidden = !moneyType;
     $('payGrid').hidden = moneyType;
@@ -1146,6 +1305,7 @@
   // Whose expense it is: only asked for Personal (V or K).
   const FOR_OPTIONS = {
     Personal: [['V', 'V'], ['K', 'K']],
+    Fixed: [['Both', 'Both (split)'], ['V', 'V'], ['K', 'K']],
     Car: [['V', 'V'], ['K', 'K'], ['Joint', 'Joint']],
   };
   function setupExpenseFor(type) {
@@ -1155,7 +1315,7 @@
     if (options) {
       const select = $('expenseFor');
       // Sonata starts on the card owner's own turn; Personal remembers the last choice.
-      const keep = type === 'Car' ? $('paidBy').value : store.get('for.' + type, options[0][0]);
+      const keep = type === 'Car' ? $('paidBy').value : type === 'Fixed' ? fixedForDefault() : store.get('for.' + type, options[0][0]);
       select.innerHTML = '';
       for (const [value, label] of options) {
         const opt = document.createElement('option');
@@ -1167,6 +1327,13 @@
     }
     lastCard = $('paidBy').value;
     updateOwedHint();
+  }
+
+  // Fixed: each bill remembers whose it was last time; a mobile bill starts as the card owner's own.
+  function fixedForDefault() {
+    const bill = selectedFixed();
+    if (!bill) return 'Both';
+    return store.get('fixedFor.' + bill, bill === 'Mobile bill' ? $('paidBy').value : 'Both');
   }
 
   function selectedFor() {
@@ -1181,7 +1348,7 @@
     const amount = parseAmount($('amount').value);
     const refund = isRefund();
     const amt = amount === null ? null : Math.abs(amount);
-    if (owner === 'Joint') {
+    if (owner === 'Joint' || owner === 'Both') {
       const other = card === 'V' ? 'K' : 'V';
       hint.textContent = refund
         ? `Joint refund back on ${card}'s card: ${other} owes ${card} half of it less` + (amt ? ` (${money(amt / 2)}).` : '.')
@@ -1197,6 +1364,7 @@
   }
   $('expenseFor').addEventListener('change', () => {
     store.set('for.' + selectedType(), $('expenseFor').value);
+    if (selectedType() === 'Fixed' && selectedFixed()) store.set('fixedFor.' + selectedFixed(), $('expenseFor').value);
     updateOwedHint();
   });
   // In Sonata, Expense for follows the card (the usual own turn) unless set to something else.
@@ -1299,7 +1467,11 @@
   // Update on both change and click so the description always follows the tapped option.
   $('typeSeg').addEventListener('change', updateTypeHint);
   $('typeSeg').addEventListener('click', () => setTimeout(updateTypeHint, 0));
-  $('fixedPicker').addEventListener('change', () => $('fixedPicker').classList.remove('invalid'));
+  $('fixedPicker').addEventListener('change', () => {
+    $('fixedPicker').classList.remove('invalid');
+    $('expenseFor').value = fixedForDefault();
+    updateOwedHint();
+  });
 
   function clearInvalid(form) {
     form.querySelectorAll('.invalid').forEach((el) => el.classList.remove('invalid'));
@@ -1406,10 +1578,10 @@
       paidBy: $('paidBy').value,
       notes: $('notes').value.trim(),
       type,
-      expenseFor: type === 'Personal' ? selectedFor() : '',
-      tag: tagged ? $('tag').value : type === 'Fixed' ? category : '',
+      expenseFor: type === 'Personal' || type === 'Fixed' ? selectedFor() : '',
+      tag: tagged ? chosenTag() : type === 'Fixed' ? category : '',
     };
-    if (tagged) rememberTag(category, entry.tag);
+    if (tagged) { addCustomTag(entry.tag); rememberTag(category, entry.tag); }
     const edited = queueSave('', entry);
     store.set('paidBy', entry.paidBy);
 
@@ -1466,7 +1638,7 @@
       : ` · ${owes > 0 ? 'K owes V' : 'V owes K'} ${money(Math.abs(owes))}`);
 
   // ---------- Edit from Recent: the form fills with the entry; saving writes over it (same id).
-  const MONEY_EDITABLE = ['Income', '401(K)', 'Investment', 'Loan payment', 'Use savings', 'Use surplus', 'Goal'];
+  const MONEY_EDITABLE = ['Income', '401(K)', 'Investment', 'Fam', 'Loan payment', 'Use savings', 'Use surplus', 'Goal'];
   function editButton(r, table, name) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -1525,11 +1697,12 @@
       pick('moneyKind', kind);
       updateTypeHint();
       $('moneyPerson').value = r.person;
-      if (kind === 'Investment') $('moneyFrom').value = r.from === 'Savings' || r.from === 'Surplus' ? 'Savings' : 'Income';
+      if (kind === 'Investment' || kind === 'Fam') $('moneyFrom').value = r.from === 'Savings' || r.from === 'Surplus' ? 'Savings' : 'Income';
+      const cat = kind === 'Fam' && r.category === 'Fam' ? '' : r.category; // "Fam" is the default when no account was named
       const chips = [...document.querySelectorAll('input[name="moneyCat"]')];
-      const chip = chips.find((c) => c.value.toLowerCase() === String(r.category).toLowerCase()) || chips.find((c) => c.value === 'Other');
+      const chip = chips.find((c) => c.value.toLowerCase() === String(cat).toLowerCase()) || chips.find((c) => c.value === 'Other');
       if (chip) chip.checked = true;
-      if (!chip || chip.value === 'Other') $('moneyOther').value = r.category || '';
+      if (!chip || chip.value === 'Other') $('moneyOther').value = cat || '';
       updateMoneyOther();
       k401Prefilled = false;
     } else if (table === 'car') {
@@ -1548,9 +1721,14 @@
       amountTyped = true;
     } else {
       updateTypeHint();
-      if (type === 'Fixed') pick('fixedCat', r.category);
+      if (type === 'Fixed') { pick('fixedCat', r.category); $('expenseFor').value = r.expenseFor === 'V' || r.expenseFor === 'K' ? r.expenseFor : 'Both'; }
       else $('category').value = r.category;
-      if (type === 'Joint' || type === 'Personal') { $('tag').value = TAGS.includes(r.tag) ? r.tag : suggestTag(r.category); tagPicked = true; }
+      if (type === 'Joint' || type === 'Personal') {
+        if (r.tag && !TAGS.includes(r.tag)) addCustomTag(r.tag);
+        $('tag').value = r.tag && allTags().includes(r.tag) ? r.tag : suggestTag(r.category);
+        tagPicked = true;
+        updateTagNew();
+      }
       $('paidBy').value = r.paidBy;
       if (type === 'Personal') $('expenseFor').value = r.expenseFor || r.paidBy;
     }
@@ -1613,6 +1791,8 @@
     '401(K)': { label: '', chips: null, persons: ['V', 'K'] },
     'Investment': { label: 'Where', chips: () => ['India', 'USA', 'Other'], persons: ['V', 'K'], fromLabel: 'From',
       from: [['Income', "This month's income"], ['Savings', 'Savings']], otherHint: 'Brokerage, HSA...' },
+    'Fam': { label: 'Fam account (optional)', chips: () => (famNames().length ? famNames().concat(['Other']) : null), persons: ['V', 'K', 'Both'], fromLabel: 'From',
+      from: [['Income', "This month's income"], ['Savings', 'Savings']], otherHint: 'Which account (optional): Mom SIP, Dad PPF...' },
     'Loan payment': { label: 'Loan', chips: () => loanNames().concat(['Other']), persons: ['V', 'K', 'Both'], otherHint: 'Which loan (V education...)' },
     'Use savings': { label: 'What for', chips: null, persons: ['V', 'K'], otherHint: 'Flight to India, laptop...' },
   };
@@ -1620,12 +1800,13 @@
     'Income': "Income: in hand after 401(K), insurance and taxes (salary, tax refund, bonus). Pick V or K for salaries; Both is for shared income, like profit from something you run together (half each).",
     '401(K)': '401(K): what the employer took from this paycheck before pay. Not part of income or savings; counts toward the goal. Starts at the last amount; change it when the contribution changes.',
     'Investment': 'Invest: money you put away from pay (India, USA...). Counts toward the goal. From savings moves money kept in earlier months.',
+    'Fam': "Fam: money sent to the family's investment account. Counts as that person's investment (it lowers savings, it is not spending), but never toward the V & K goal. Both splits it half each.",
     'Loan payment': 'Loan: what you sent toward a loan. Counts as spending for the month. Both splits it half each.',
     'Use savings': "Savings: spend from your own savings kept in earlier months (V's or K's, never shared). Leaves this month alone.",
   };
-  const KIND_TAGS = { 'Income': 'Income', '401(K)': '401(K)', 'Investment': 'Invested', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
+  const KIND_TAGS = { 'Income': 'Income', '401(K)': '401(K)', 'Investment': 'Invested', 'Fam': 'Fam', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
     'Use surplus': 'Savings used', 'Prior investment': 'Invested before', 'Goal': 'Goal', 'Savings target': 'Savings target' };
-  const KIND_CLASS = { 'Income': 'c-income', '401(K)': 'c-k401', 'Investment': 'c-invest', 'Prior investment': 'c-invest', 'Loan payment': 'c-loan',
+  const KIND_CLASS = { 'Income': 'c-income', '401(K)': 'c-k401', 'Investment': 'c-invest', 'Prior investment': 'c-invest', 'Fam': 'c-fam', 'Loan payment': 'c-loan',
     'Use savings': 'c-surplus', 'Use surplus': 'c-surplus', 'Goal': 'c-goal', 'Savings target': 'c-goal' };
 
   const trio = () => ({ V: 0, K: 0, total: 0 });
@@ -1636,6 +1817,8 @@
   const tone = (v) => (v <= -0.01 ? 'neg' : v >= 0.01 ? 'pos' : '');
   // Loans you have paid toward before, most paid first (they become buttons).
   const loanNames = () => (fundsEstimate().loans || []).map((l) => l.name).slice(0, 4);
+  // Fam accounts sent to before (named ones only), most sent first.
+  const famNames = () => (fundsEstimate().fams || []).map((a) => a.name).filter((x) => x && x !== 'Fam').slice(0, 4);
 
   function selectedKind() {
     const checked = document.querySelector('input[name="moneyKind"]:checked');
@@ -1660,7 +1843,8 @@
       input.checked = c === keep || (!chips.includes(keep) && i === 0);
       const label = document.createElement('label');
       label.htmlFor = 'mc' + i;
-      label.textContent = c === 'Other' && kind === 'Loan payment' ? (chips.length > 1 ? 'Another loan' : 'Name the loan') : c;
+      label.textContent = c === 'Other' && kind === 'Loan payment' ? (chips.length > 1 ? 'Another loan' : 'Name the loan')
+        : c === 'Other' && kind === 'Fam' ? 'Another / none' : c;
       picker.append(input, label);
     });
     updateMoneyOther();
@@ -1702,7 +1886,7 @@
   function updateMoneyOther() {
     const cfg = MONEY_KINDS[selectedKind()];
     const chip = (document.querySelector('input[name="moneyCat"]:checked') || {}).value;
-    $('moneyOther').hidden = !(cfg.label && (!cfg.chips || chip === 'Other'));
+    $('moneyOther').hidden = !(cfg.label && (!(cfg.chips && cfg.chips()) || chip === 'Other'));
     $('moneyOther').placeholder = cfg.otherHint || '';
   }
   $('kindSeg').addEventListener('change', setupMoneyFields);
@@ -1714,7 +1898,7 @@
     if (!cfg.label) return '';
     const chip = (document.querySelector('input[name="moneyCat"]:checked') || {}).value;
     const typed = $('moneyOther').value.trim();
-    if (!cfg.chips) return typed;
+    if (!(cfg.chips && cfg.chips())) return typed;
     return chip === 'Other' ? typed : chip || '';
   }
 
@@ -1725,7 +1909,7 @@
     const category = moneyCategory();
     if (kind === 'Loan payment' && !category) return markInvalid($('moneyOther'), 'Which loan is this for?');
     const entry = { id: uuid(), date, kind, category, amount, person: $('moneyPerson').value, notes: $('notes').value.trim() };
-    if (kind === 'Investment') entry.from = $('moneyFrom').value;
+    if (kind === 'Investment' || kind === 'Fam') entry.from = $('moneyFrom').value;
     const edited = queueSave('funds', entry);
 
     const keepFrom = $('moneyFrom').value;
@@ -1739,7 +1923,7 @@
     updateTypeHint();
     $('moneyPerson').value = entry.person;
     if (kind === '401(K)') { k401Prefilled = true; prefill401(); }
-    if (kind === 'Investment') $('moneyFrom').value = keepFrom;
+    if (kind === 'Investment' || kind === 'Fam') $('moneyFrom').value = keepFrom;
 
     $('saveBtn').disabled = true;
     const status = await sync();
@@ -1749,6 +1933,7 @@
     if (kind === 'Use savings' || entry.from === 'Savings') extra = ` · ${money(f.available.total)} savings from earlier left`;
     if ((kind === 'Investment' || kind === '401(K)') && f.goal) extra += ` · goal ${f.goal.percent}% done`;
     if (kind === '401(K)') extra += ` · ${money(f.now.k401.total)} 401(K) this month`;
+    if (kind === 'Fam') extra += ` · ${money(f.now.famAll.total)} to Fam this month (not toward the goal)`;
     if (String(date).slice(0, 7) === currentMonth()) extra += ` · ${money(f.now.savings.total)} savings this month`;
     report(status, `${edited ? 'Updated' : 'Saved'} ✓ ${category || KIND_TAGS[kind]} ${money(amount)}${extra}`);
     if (!edited && kind === 'Income' && category === 'Salary' && (entry.person === 'V' || entry.person === 'K') && status !== 'outdated') openPayday(entry);
@@ -1760,6 +1945,7 @@
     month, label: ymLabel(month), income: trio(), shared: trio(), personal: trio(), sonata: trio(), loan: trio(), spent: trio(),
     invest: trio(), savings: trio(), kept: trio(), rate: { V: null, K: null, total: null }, investSaved: trio(), used: trio(),
     savedBefore: trio(), savedAfter: trio(), joint: 0, fixed: 0, sonataShared: 0, budgets: null, k401: trio(), putAway: trio(),
+    fam: trio(), famSaved: trio(), famAll: trio(), jointHalf: trio(), fixedEach: trio(),
   });
   const shares = (who, amt) => (who === 'Both' || who === 'Joint' ? { V: amt / 2, K: amt / 2 } : who === 'K' ? { V: 0, K: amt } : who === 'V' ? { V: amt, K: 0 } : { V: 0, K: 0 });
   const bump = (o, who, amt) => { const x = shares(who, amt); o.V += x.V; o.K += x.K; if ('total' in o) o.total += x.V + x.K; };
@@ -1781,13 +1967,21 @@
         recent: base ? base.recent || [] : [],
         available: prev ? { ...prev.savedAfter } : trio(), loanUsual: base ? base.loanUsual : trio(), recap: base ? base.recap : null,
         suggestions: base ? base.suggestions || [] : [], hasEntries: base ? base.hasEntries : false,
-        k401Total: base ? base.k401Total : null, k401Last: base ? base.k401Last : null };
+        k401Total: base ? base.k401Total : null, k401Last: base ? base.k401Last : null,
+        fams: base ? (base.fams || []).map((a) => ({ ...a, thisMonth: 0 })) : [], famTotal: base ? base.famTotal : null };
       f.now.savedBefore = { ...f.available };
     }
     const n = f.now;
     n.k401 = n.k401 || trio();
     f.k401Total = f.k401Total ? { ...f.k401Total } : trio();
     f.k401Last = f.k401Last ? { ...f.k401Last } : { V: null, K: null };
+    // A script older than version 25 sends no Fam numbers.
+    n.fam = n.fam || trio();
+    if (!n.jointHalf) { const h = round2((n.joint || 0) / 2); n.jointHalf = { V: h, K: h, total: round2(n.joint || 0) }; }
+    if (!n.fixedEach) { const h = round2((n.fixed || 0) / 2); n.fixedEach = { V: h, K: h, total: round2(n.fixed || 0) }; }
+    n.famSaved = n.famSaved || trio();
+    f.fams = f.fams || [];
+    f.famTotal = f.famTotal ? { ...f.famTotal } : trio();
     let changed = false;
     const firstMonth = f.history.length ? f.history[0].month : month;
     // Spending this month lowers savings; spending in an earlier tracked month lowers savings carried over.
@@ -1796,7 +1990,8 @@
       if (m > month || m < firstMonth) return;
       changed = true;
       if (m < month) { bump(f.available, who, -amt); return; }
-      if (cat === 'joint' || cat === 'fixed') { n[cat] += amt; bump(n.shared, 'Both', amt); }
+      if (cat === 'joint') { n.joint += amt; bump(n.shared, 'Both', amt); bump(n.jointHalf, 'Both', amt); }
+      if (cat === 'fixed') { if (who === 'Both') n.fixed += amt; bump(n.shared, who, amt); bump(n.fixedEach, who, amt); }
       if (cat === 'sonata') { bump(n.sonata, who, amt); if (who === 'Joint') n.sonataShared += amt; }
       if (cat === 'personal') bump(n.personal, who, amt);
       if (cat === 'loan') bump(n.loan, who, amt);
@@ -1816,6 +2011,18 @@
         else if (m === month) { bump(n.invest, e.person, amt); bump(n.savings, e.person, -amt); }
         else bump(f.available, e.person, -amt);
       }
+      if (e.kind === 'Fam') {
+        if (m <= month) {
+          if (e.from === 'Savings') { bump(f.available, e.person, -amt); if (m === month) bump(n.famSaved, e.person, amt); }
+          else if (m === month) { bump(n.fam, e.person, amt); bump(n.savings, e.person, -amt); }
+          else bump(f.available, e.person, -amt);
+        }
+        bump(f.famTotal, e.person, amt);
+        const name = e.category || 'Fam';
+        let a = f.fams.find((x) => x.name.toLowerCase() === name.toLowerCase());
+        if (!a && sign > 0) { a = { name, thisMonth: 0, total: 0, V: 0, K: 0, last: '' }; f.fams.push(a); }
+        if (a) { bump(a, e.person, amt); if (m === month) a.thisMonth += amt; if (sign > 0 && e.date > a.last) a.last = e.date; }
+      }
       if ((e.kind === 'Use savings' || e.kind === 'Use surplus') && m <= month) { bump(f.available, e.person, -amt); if (m === month) bump(n.used, e.person, amt); }
       if ((e.kind === 'Investment' || e.kind === 'Prior investment' || e.kind === '401(K)') && f.goal) bump(f.goal.invested, e.person, amt);
       if (e.kind === '401(K)') {
@@ -1827,25 +2034,29 @@
         spend(e.date, 'loan', e.person, amt);
         let l = (f.loans || []).find((x) => x.name.toLowerCase() === String(e.category).toLowerCase());
         if (!l && sign > 0) { l = { name: e.category, thisMonth: 0, total: 0, V: 0, K: 0, last: '' }; f.loans.push(l); }
-        if (l) { l.total += amt; bump(l, e.person, amt); if (m === month) l.thisMonth += amt; if (sign > 0 && e.date > l.last) l.last = e.date; }
+        if (l) { bump(l, e.person, amt); if (m === month) l.thisMonth += amt; if (sign > 0 && e.date > l.last) l.last = e.date; }
       }
       if (e.kind === 'Goal' && sign > 0) {
         f.goal = f.goal || { invested: trio(), avg: trio(), suggestions: [] };
         Object.assign(f.goal, { target: e.amount, deadline: e.category, deadlineLabel: ymLabel(e.category) });
       }
     };
-    const lists = { funds: f.recent || [], car: (st.car && st.car.recent) || [], main: st.recent || [] };
     for (const op of pendingOps()) {
-      const e = op.op === 'add' ? op.entry : lists[op.table || 'main'].find((r) => r.id === op.id);
+      const e = op.op === 'add' ? op.entry : op.table === 'funds' ? (f.recent || []).find((r) => r.id === op.id) || findRow('funds', op.id) : findRow(op.table || 'main', op.id);
       if (!e) continue;
       const sign = op.op === 'add' ? 1 : -1;
       if (op.table === 'funds') { f.hasEntries = true; applyFund(e, sign); continue; }
       if (op.table === 'car') { if (e.category !== 'Settlement') spend(e.date, 'sonata', e.expenseFor || e.paidBy, sign * e.amount); continue; }
-      if (e.type === 'Joint' || e.type === 'Fixed') spend(e.date, e.type.toLowerCase(), 'Both', sign * e.amount);
+      if (e.type === 'Joint') spend(e.date, 'joint', 'Both', sign * e.amount);
+      if (e.type === 'Fixed') spend(e.date, 'fixed', e.expenseFor === 'V' || e.expenseFor === 'K' ? e.expenseFor : 'Both', sign * e.amount);
       if (e.type === 'Personal') spend(e.date, 'personal', e.expenseFor || e.paidBy, sign * e.amount);
     }
     const r2 = (o) => { if (!o) return o; for (const k of Object.keys(o)) if (typeof o[k] === 'number') o[k] = round2(o[k]); return o; };
-    ['income', 'shared', 'personal', 'sonata', 'loan', 'spent', 'invest', 'savings', 'kept', 'investSaved', 'used', 'k401'].forEach((k) => { n[k] = r2(n[k] || trio()); });
+    ['income', 'shared', 'jointHalf', 'fixedEach', 'personal', 'sonata', 'loan', 'spent', 'invest', 'savings', 'kept', 'investSaved', 'used', 'k401', 'fam', 'famSaved'].forEach((k) => { n[k] = r2(n[k] || trio()); });
+    n.famAll = r2({ V: n.fam.V + n.famSaved.V, K: n.fam.K + n.famSaved.K, total: n.fam.total + n.famSaved.total });
+    r2(f.famTotal);
+    for (const a of f.fams) r2(a);
+    f.fams.sort((a, b) => b.total - a.total);
     r2(f.k401Total);
     n.putAway = r2({ V: n.k401.V + n.invest.V + n.investSaved.V, K: n.k401.K + n.invest.K + n.investSaved.K, total: n.k401.total + n.invest.total + n.investSaved.total });
     r2(f.available);
@@ -1936,14 +2147,16 @@
     $('mSavedWord').textContent = n.savings.total < 0 ? 'short this month' : 'savings this month';
     tableRows($('mTable'), [
       ['Income', n.income.V, n.income.K, n.income.total],
-      ['Joint + Fixed (half each)', n.shared.V, n.shared.K, n.shared.total],
+      ['Joint (half each)', n.jointHalf.V, n.jointHalf.K, n.jointHalf.total],
+      ['Fixed (half shared + own)', n.fixedEach.V, n.fixedEach.K, n.fixedEach.total],
       ['Personal', n.personal.V, n.personal.K, n.personal.total],
       ['Sonata', n.sonata.V, n.sonata.K, n.sonata.total],
       ['Loan payments', n.loan.V, n.loan.K, n.loan.total],
       ['Spent', n.spent.V, n.spent.K, n.spent.total, 'total'],
       ['Invested', n.invest.V, n.invest.K, n.invest.total],
+      ['Fam (not toward goal)', n.fam.V, n.fam.K, n.fam.total],
       ['Savings', n.savings.V, n.savings.K, n.savings.total, 'left-row'],
-      ['Kept (invested + savings)', n.rate.V, n.rate.K, n.rate.total, '', pctText],
+      ['Kept (invested + Fam + savings)', n.rate.V, n.rate.K, n.rate.total, '', pctText],
     ]);
     // 401(K)
     $('mK401').textContent = money(n.k401.total);
@@ -1982,7 +2195,8 @@
     $('mSurplusV').textContent = money(f.available.V);
     $('mSurplusK').textContent = money(f.available.K);
     $('mSurplusAfter').textContent = money(n.savedAfter.total);
-    const moved = [n.used.total ? `${money(n.used.total)} spent from it` : '', n.investSaved.total ? `${money(n.investSaved.total)} invested from it` : ''].filter(Boolean);
+    const moved = [n.used.total ? `${money(n.used.total)} spent from it` : '', n.investSaved.total ? `${money(n.investSaved.total)} invested from it` : '',
+      n.famSaved.total ? `${money(n.famSaved.total)} sent to Fam from it` : ''].filter(Boolean);
     $('mSurplusNote').textContent = (moved.length ? `This month: ${moved.join(', ')}. ` : '') +
       `Kept in earlier months and not decided yet; your call. ${monthWord}'s savings join it on the 1st. Invest it (Invest > From: Savings) or spend it (Savings).`;
 
@@ -2030,13 +2244,35 @@
       lb.appendChild(tr);
     }
 
+    // Fam: money sent to the family's investment account (counted as invested, never toward the goal)
+    const fams = f.fams || [];
+    $('mFam').textContent = money(n.famAll.total);
+    $('mFamV').textContent = money(n.famAll.V);
+    $('mFamK').textContent = money(n.famAll.K);
+    $('mFamAll').textContent = money(f.famTotal.total);
+    $('mFamTable').hidden = !fams.length;
+    const fb = $('mFams');
+    fb.innerHTML = '';
+    for (const a of fams) {
+      const tr = document.createElement('tr');
+      cell(tr, a.name === 'Fam' ? 'Not named' : a.name, '', 'th');
+      cell(tr, money(a.thisMonth));
+      cell(tr, money(a.total));
+      cell(tr, `${usd0(a.V)} / ${usd0(a.K)}`);
+      fb.appendChild(tr);
+    }
+    const famMonths = f.history.filter((h) => h.month !== f.month && h.famAll && h.famAll.total);
+    $('mFamNote').textContent = (n.famSaved.total ? `${money(n.famSaved.total)} of this month's came from savings. ` : '') +
+      (famMonths.length ? `Last month with Fam: ${usd0(famMonths[famMonths.length - 1].famAll.total)} in ${ymLabel(famMonths[famMonths.length - 1].month)}. ` : '') +
+      "Counted as V's or K's investment (it lowers savings, it is not spending) but never toward the V & K goal. Log it with Fam below.";
+
     // Month by month (latest first; this month from the live estimate)
     const hb = $('mHistory');
     hb.innerHTML = '';
     const hist = f.history.filter((h) => h.month !== f.month).concat(ready ? [{ ...n, month: f.month }] : []);
     if (!hist.length) {
       const tr = document.createElement('tr');
-      cell(tr, 'Log income to start the monthly picture.', 'muted').colSpan = 5;
+      cell(tr, 'Log income to start the monthly picture.', 'muted').colSpan = 6;
       hb.appendChild(tr);
     }
     for (const h of hist.slice(-12).reverse()) {
@@ -2046,6 +2282,7 @@
       cell(tr, usd0(h.income.total));
       cell(tr, usd0(h.spent.total));
       cell(tr, usd0(h.invest.total));
+      cell(tr, usd0(h.famAll ? h.famAll.total : 0));
       cell(tr, usd0(h.savings.total), tone(h.savings.total));
       hb.appendChild(tr);
     }
@@ -2057,11 +2294,9 @@
   }
 
   function renderMoneyRecent() {
-    const f = (getState() || {}).funds;
-    const queue = pendingOps().filter((op) => op.table === 'funds');
-    const deleting = new Set(queue.filter((op) => op.op === 'delete').map((op) => op.id));
-    const pending = queue.filter((op) => op.op === 'add').map((op) => ({ ...op.entry, pending: true })).reverse();
-    const rows = [...pending, ...((f && f.recent) || []).filter((r) => !deleting.has(r.id))];
+    const src = recentSource();
+    const rows = recentRows(src);
+    renderMoreButton(src);
     const list = $('recentList');
     list.innerHTML = '';
     if (!rows.length) list.appendChild(el('li', 'empty', 'Nothing yet.'));
@@ -2074,7 +2309,8 @@
       const sub = el('div', 'sub');
       const parts = [prettyDate(r.date)];
       if (r.person && r.kind !== 'Goal' && r.kind !== 'Savings target') parts.push(r.person === 'Both' ? 'V + K' : r.person);
-      if (r.kind === 'Investment' && (r.from === 'Savings' || r.from === 'Surplus')) parts.push('from savings');
+      if ((r.kind === 'Investment' || r.kind === 'Fam') && (r.from === 'Savings' || r.from === 'Surplus')) parts.push('from savings');
+      if (r.kind === 'Fam') parts.push('not toward goal');
       parts.push(r.notes);
       sub.append(el('span', 'tag', KIND_TAGS[r.kind] || r.kind), document.createTextNode(parts.filter(Boolean).join(' · ')));
       body.append(top, sub);
@@ -2096,7 +2332,7 @@
   // ---------- Home: one glance at everything; each tile opens its page
   function owedStatus(p) {
     const vShare = round2(p.v - p.spent / 2);
-    const fvShare = round2(p.fv - p.fixed / 2);
+    const fvShare = fixedShares(p).fvShare;
     return statusOf(round2(vShare + fvShare + round2(p.personal || 0)), p.settledNet || 0, p.settled || 0);
   }
 
@@ -2146,7 +2382,8 @@ if (ready && f.now.income.total > 0) {
     const os = owedStatus(p);
     tile('Joint', '#22c55e', 'Who owes whom', os.kind === 'open' ? settleText(os.remaining, -os.remaining) : os.kind === 'cleared' ? 'Cleared' : 'Even',
       os.kind === 'open' ? 'Joint + Fixed + Personal, this month' : 'Nothing owed this month', os.kind === 'cleared' ? 'good' : '');
-    tile('Fixed', '#fb923c', 'Fixed bills', money(p.fixed), `${monthWord} · V ${money(p.fv)}, K ${money(p.fk)}`);
+    const fxh = fixedShares(p);
+    tile('Fixed', '#fb923c', 'Fixed bills', money(p.fixed), `${monthWord} · V's fixed ${money(fxh.fixedV)}, K's ${money(fxh.fixedK)}`);
     const c = st.car;
     const carMonth = c && (c.monthly || []).find((m) => m.month === currentMonth());
     tile('Car', '#818cf8', 'Sonata', c && c.mpg ? `${Number(c.mpg).toFixed(1)} MPG` : '—', `${money(carMonth ? carMonth.total : 0)} on the car in ${monthWord}`);
@@ -2156,6 +2393,9 @@ if (ready && f.now.income.total > 0) {
     }
     if (f.now.k401.total > 0 || f.k401Total.total > 0) {
       tile('Funds', '#8b5cf6', '401(K)', money(f.now.k401.total), `${monthWord} · V ${usd0(f.now.k401.V)}, K ${usd0(f.now.k401.K)} · ${usd0(f.k401Total.total)} so far`);
+    }
+    if (f.now.famAll.total > 0 || f.famTotal.total > 0) {
+      tile('Funds', '#14b8a6', 'Fam', money(f.now.famAll.total), `${monthWord} · V ${usd0(f.now.famAll.V)}, K ${usd0(f.now.famAll.K)} · ${usd0(f.famTotal.total)} so far · not in goal`);
     }
     if (f.goal) tile('Funds', '#a855f7', 'Goal', `${f.goal.percent}%`, `${usd0(f.goal.need.total)} a month to reach ${usd0(f.goal.target)} by ${f.goal.deadlineLabel}`);
     if (f.now.loan.total > 0 || (f.loans || []).length) {
@@ -2529,17 +2769,17 @@ if (ready && f.now.income.total > 0) {
       const lastMonth = yoyYear === cur.slice(0, 4) ? Number(cur.slice(5, 7)) : 12;
       charts.appendChild(yearOverYear(`Year over year · ${yoyYear} vs ${Number(yoyYear) - 1}`, yoyYear, spend, f.month !== 'all' ? f.month : '', lastMonth));
     }
-    // Funds in the same period (income, 401(K), investments, loans, savings used).
+    // Funds in the same period (income, 401(K), investments, Fam, loans, savings used).
     if (funds.length && f.group === 'all') {
       const ff = el('figure', 'chart');
       ff.appendChild(el('figcaption', '', `Funds · ${periods.main.label}`));
       const ul = el('ul', 'fund-rows');
-      for (const kind of ['Income', '401(K)', 'Investment', 'Loan payment', 'Use savings']) {
+      for (const kind of ['Income', '401(K)', 'Investment', 'Fam', 'Loan payment', 'Use savings']) {
         const v = sum(funds.filter((r) => r[1] === kind));
         if (!v) continue;
         const li = el('li');
         const byWho = ['V', 'K', 'Both'].map((w) => [w, sum(funds.filter((r) => r[1] === kind && r[2] === w))]).filter(([, x]) => x);
-        li.append(el('span', '', kind === 'Use savings' ? 'Savings used' : kind), el('span', 'fr-amt', money(v)),
+        li.append(el('span', '', kind === 'Use savings' ? 'Savings used' : kind === 'Fam' ? 'Fam (not in goal)' : kind), el('span', 'fr-amt', money(v)),
           el('span', 'fr-sub', byWho.map(([w, x]) => `${w === 'Both' ? 'Joint' : w} ${usd0(x)}`).join(' · ')));
         ul.appendChild(li);
       }

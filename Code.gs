@@ -14,9 +14,10 @@
  *   Date | Category | Amount ($) | Card Used | Notes | Type | Joint Left ($) | ID | Expense For | Tag
  * The "Sirikh" tab is an overview with one row per month, rebuilt on every save.
  *
- * Card Used is whose card paid. Expense For is whose expense it is: blank (shared) for Joint and
- * Fixed, V or K for Personal. A Personal expense paid on the other person's card is owed back in
- * full (K's ramen on V's card: K owes V the whole amount).
+ * Card Used is whose card paid. Expense For is whose expense it is: blank (shared) for Joint, V or K
+ * for Personal, and Both (shared, split 50/50; blank on older rows), V or K for Fixed (V's and K's
+ * own mobile bills). A one-person expense (Personal or Fixed) paid on the other person's card is
+ * owed back in full (K's ramen on V's card: K owes V the whole amount).
  *
  * Type is one of:
  *   Joint            shared day-to-day expense, comes out of the month's joint budget  (no color)
@@ -43,7 +44,8 @@
  * Columns K onward of each month tab hold that month's tables (who owes whom, fixed bills,
  * personal expenses, budgets with what is left). The script overwrites that area.
  *
- * Income, 401(K), investments, loan payments, savings and the savings goal live in the "Funds" tab:
+ * Income, 401(K), investments, Fam (money sent to the family's investment account), loan payments,
+ * savings and the savings goal live in the "Funds" tab:
  * entries on the left, an overview (this month, 401(K), savings, goal, loan payments, month by month)
  * from column J. Two more tabs are rebuilt from it: "Loans" (each loan month by month and every
  * payment) and "VK" (V and K side by side, month over month). See the Funds section at the end of
@@ -59,19 +61,23 @@ const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
   'October', 'November', 'December'];
 const MONTH_TAB_RE = /^Sirikh (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 24;
+const BACKEND_VERSION = 25;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For', 'Tag'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8, TAG: 9 };
 // Tags for Joint and Personal expenses (the app's dropdown). Fixed bills use their bill as the tag,
 // Sonata rows their car category and Funds rows their kind.
 const TAGS = ['Groceries', 'Dining out', 'Entertainment', 'Shopping', 'Household items', 'Subscriptions', 'Travel', 'Fuel',
-  'Transport', 'Health', 'Personal care', 'Gifts', 'Education', 'Other'];
-const FIXED_TAGS = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Misc'];
+  'Transport', 'Health', 'Personal care', 'Gifts', 'Education', 'Bills', 'Other'];
+// Tags of your own: picking Other in the app lets you name one; it is accepted here as typed (up
+// to 30 characters) and joins the sheet's dropdown and the app's list.
+const TAG_MAX = 30;
+const FIXED_TAGS = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Mobile bill', 'Misc'];
 // A blank Tag (older rows, hand-typed rows) is filled with a best guess from the Category.
 const TAG_GUESSES = [
   ['Fuel', /\b(gas|fuel|shell|exxon|bp|chevron|sunoco|wawa|sheetz|circle k|speedway)\b/],
   ['Groceries', /\b(ht|harris teeter|costco|walmart|aldi|kroger|lidl|publix|trader joe|whole foods|food lion|wegmans|sam'?s club|grocer|patel|apna|indian store|safeway|giant|sprouts|bj'?s)\b/],
   ['Dining out', /\b(restaurant|cafe|coffee|starbucks|dunkin|pizza|biryani|rice|chipotle|mcdonald|burger|taco|sushi|lunch|dinner|breakfast|doordash|uber ?eats|grubhub|bar|boba|tea|chai|dosa|wendy|subway|panera|chick)\b/],
+  ['Bills', /\b(bill|bills|insurance|verizon|t-mobile|at&t|xfinity|spectrum|duke energy)\b/],
   ['Subscriptions', /\b(netflix|spotify|prime|icloud|youtube|hulu|disney|hbo|chatgpt|claude|apple music|subscription|membership|gym)\b/],
   ['Entertainment', /\b(movie|cinema|amc|regal|concert|game|bowling|show|ticket|event|park)\b/],
   ['Travel', /\b(flight|airline|hotel|airbnb|trip|vacation|booking|expedia|delta|united|american airlines|southwest)\b/],
@@ -98,6 +104,18 @@ const MONEY = '$#,##0.00';
 // Entry amounts: a refund (negative amount) shows in green.
 const ENTRY_MONEY = '$#,##0.00;[Color10]-$#,##0.00';
 const RECENT_COUNT = 10;
+// Which rows each page's Recent list shows (Home shows every row). Older rows come from the
+// "list" action, a page at a time.
+const RECENT_GROUPS = {
+  Joint: ['Joint', 'Set balance', 'Add funds', 'Settlement'],
+  Fixed: ['Fixed'],
+  Personal: ['Personal', 'Personal budget', 'Settlement'],
+};
+const LIST_MAX = 100;
+// Every entry, newest first, from the last state_ / carState_ / fundsState_ call (for the list action).
+let MAIN_LIST_CACHE = [];
+let CAR_LIST_CACHE = [];
+let FUNDS_LIST_CACHE = [];
 const SUMMARY_COL = 11; // column K (column J until version 24, before the Tag column)
 
 function doGet() {
@@ -146,14 +164,25 @@ function doPost(e) {
         }
       } else if (body.action === 'recap') {
         setRecap_(body);
-      } else if (body.action !== 'state') {
+      } else if (body.action !== 'state' && body.action !== 'list') {
         throw new Error('Unknown action.');
       }
       result = state_(today.slice(0, 7), touched);
+      // A new tag of your own: add it to every month tab's Tag dropdown.
+      const sent = body.entry && (body.action === 'add' || body.action === 'update') && !isCar && !isFunds ? String(body.entry.tag || '') : '';
+      if (sent && TAGS.indexOf(sent) === -1) {
+        const props = PropertiesService.getScriptProperties();
+        const list = customTags_().join('|');
+        if (props.getProperty('SIRIKH_TAG_LIST') !== list) {
+          refreshTagDropdowns_();
+          props.setProperty('SIRIKH_TAG_LIST', list);
+        }
+      }
       result.car = carState_(carSheet);
       result.funds = fundsState_(today, MONTHS_CACHE, carSheet);
       result.analytics = analytics_(MONTHS_CACHE, carSheet);
       if (body.action === 'recap' && body.test) result.recapSent = sendRecap_(today);
+      if (body.action === 'list') result.list = list_(body);
     } finally {
       lock.releaseLock();
     }
@@ -233,7 +262,7 @@ function upgradeMonthTab_(sheet) {
   sheet.setFrozenRows(1);
   sheet.hideColumns(C.ID + 1);
   // A dropdown in the Tag column; other text is still accepted (shown with a warning mark).
-  const rule = SpreadsheetApp.newDataValidation().requireValueInList(TAGS.concat(FIXED_TAGS), true).setAllowInvalid(true).build();
+  const rule = tagRule_(MONTHS_CACHE.length ? customTags_() : []);
   sheet.getRange(2, C.TAG + 1, Math.max(sheet.getMaxRows() - 1, 1), 1).setDataValidation(rule);
   return moved;
 }
@@ -295,6 +324,12 @@ function validate_(b) {
     expenseFor = b.expenseFor === undefined || b.expenseFor === '' ? paidBy : String(b.expenseFor);
     if (expenseFor !== 'V' && expenseFor !== 'K') throw new Error('Expense for must be V or K.');
   }
+  // A Fixed bill is shared (Both, split 50/50) unless it is one person's own (a mobile line).
+  if (type === 'Fixed') {
+    expenseFor = String(b.expenseFor || 'Both');
+    if (expenseFor === 'Joint' || expenseFor === '') expenseFor = 'Both';
+    if (['V', 'K', 'Both'].indexOf(expenseFor) === -1) throw new Error('Expense for must be V, K or Both.');
+  }
   // A settlement goes from the payer (Card Used) to the other person (Expense For).
   const method = SETTLE_METHODS.indexOf(b.method) !== -1 ? b.method : 'Splitwise';
   if (isSettlement) expenseFor = paidBy === 'V' ? 'K' : 'V';
@@ -311,7 +346,7 @@ function validate_(b) {
   // Joint and Personal take a tag from the list (a guess from the category when none is sent);
   // a Fixed bill is its own tag.
   let tag = '';
-  if (type === 'Joint' || type === 'Personal') tag = TAGS.indexOf(b.tag) !== -1 ? b.tag : guessTag_(category);
+  if (type === 'Joint' || type === 'Personal') tag = TAGS.indexOf(b.tag) !== -1 ? b.tag : cleanTag_(b.tag) || guessTag_(category);
   if (type === 'Fixed') tag = fixedTag_(category);
 
   return {
@@ -328,6 +363,37 @@ function validate_(b) {
   };
 }
 
+// A tag of your own: trimmed, single spaces, first letter capital, no formula start. '' if unusable.
+function cleanTag_(v) {
+  const t = String(v || '').replace(/\s+/g, ' ').trim().slice(0, TAG_MAX);
+  if (!t || /^[=+\-@]/.test(t)) return '';
+  const known = TAGS.concat(FIXED_TAGS).find((x) => x.toLowerCase() === t.toLowerCase());
+  return known || t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+// Tags of your own used in Joint and Personal rows, in the order first seen.
+function customTags_(months) {
+  const out = [];
+  (months || MONTHS_CACHE).forEach((m) => m.rows.forEach((r) => {
+    if (isEmptyRow_(r)) return;
+    const type = normalizeType_(r[C.TYPE]);
+    if (type !== 'Joint' && type !== 'Personal') return;
+    const t = String(r[C.TAG] || '').trim();
+    if (t && TAGS.indexOf(t) === -1 && FIXED_TAGS.indexOf(t) === -1 && out.indexOf(t) === -1) out.push(t);
+  }));
+  return out;
+}
+
+// The Tag column's dropdown: the standard tags, the fixed bills and your own tags.
+function tagRule_(custom) {
+  return SpreadsheetApp.newDataValidation().requireValueInList(TAGS.concat(FIXED_TAGS).concat(custom || []), true).setAllowInvalid(true).build();
+}
+// Called when a new tag of your own is saved, so every month tab's dropdown offers it.
+function refreshTagDropdowns_() {
+  const rule = tagRule_(customTags_());
+  monthTabs_().forEach((t) => t.sheet.getRange(2, C.TAG + 1, Math.max(t.sheet.getMaxRows() - 1, 1), 1).setDataValidation(rule));
+}
+
 function guessTag_(category) {
   const s = String(category || '').toLowerCase();
   for (let i = 0; i < TAG_GUESSES.length; i++) if (TAG_GUESSES[i][1].test(s)) return TAG_GUESSES[i][0];
@@ -335,6 +401,7 @@ function guessTag_(category) {
 }
 function fixedTag_(category) {
   const s = String(category || '').trim().toLowerCase().replace(/[\s-]/g, '');
+  if (s === 'mobile' || s === 'phone' || s === 'phonebill' || s === 'mobilebill') return 'Mobile bill';
   for (let i = 0; i < FIXED_TAGS.length; i++) if (FIXED_TAGS[i].toLowerCase().replace(/[\s-]/g, '') === s) return FIXED_TAGS[i];
   return 'Misc';
 }
@@ -526,6 +593,11 @@ function owner_(r) {
   const f = String(r[C.FOR] || '').trim().toUpperCase();
   return f === 'V' || f === 'K' ? f : String(r[C.PAID_BY]);
 }
+// Whose Fixed bill this is: V or K for one person's own bill, Both (shared) otherwise, blank included.
+function fixedOwner_(r) {
+  const f = String(r[C.FOR] || '').trim().toUpperCase();
+  return f === 'V' || f === 'K' ? f : 'Both';
+}
 
 function colorRows_(sheet, rows) {
   const range = sheet.getRange(2, 1, rows.length, HEADERS.length);
@@ -545,7 +617,10 @@ function emptyPeriod_(key) {
   // pv / pk: Personal expenses for V / K in the month
   // kOnK / vOnV on their own card (nothing owed), kOnV / vOnK on the other's card (owed in full)
   return { month: key || '', since: key ? key + '-01' : '', hasBudget: false, start: 0, added: 0, spent: 0,
-    v: 0, k: 0, fixed: 0, fv: 0, fk: 0, personal: 0, pv: 0, pk: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0,
+    // fixed: all Fixed bills; fv / fk what each card paid. fShared: shared bills (fsv / fsk by card);
+    // fOwnV / fOwnK each person's own bills (mobile lines); fixedOwed: own bills on the other's card
+    // (positive = K owes V)
+    v: 0, k: 0, fixed: 0, fv: 0, fk: 0, fShared: 0, fsv: 0, fsk: 0, fOwnV: 0, fOwnK: 0, fixedOwed: 0, personal: 0, pv: 0, pk: 0, kOnK: 0, kOnV: 0, vOnV: 0, vOnK: 0,
     // settlements: total paid, and the net that clears "K owes V" (positive = K paid V)
     settled: 0, settledNet: 0 };
 }
@@ -568,6 +643,15 @@ function period_(rows, key) {
       p.fixed += amount;
       if (r[C.PAID_BY] === 'V') p.fv += amount;
       if (r[C.PAID_BY] === 'K') p.fk += amount;
+      const who = fixedOwner_(r);
+      if (who === 'Both') {
+        p.fShared += amount;
+        if (r[C.PAID_BY] === 'V') p.fsv += amount;
+        if (r[C.PAID_BY] === 'K') p.fsk += amount;
+      } else {
+        p['fOwn' + who] += amount;
+        p.fixedOwed += personalOwed_(who, r[C.PAID_BY], amount);
+      }
     }
     if (type === 'Settlement') {
       p.settled += amount;
@@ -631,14 +715,18 @@ function settleText_(vShare, kShare) {
 // Share = what each paid minus half of the total (same as the monthly blocks in the other tabs).
 function shares_(p) {
   const split = round2_(p.spent / 2);
-  const fSplit = round2_(p.fixed / 2);
+  // Fixed: shared bills split 50/50; a person's own bill on the other's card is owed in full.
+  const fSplit = round2_(p.fShared / 2);
   const s = {
     split: split,
     vShare: round2_(p.v - split),
     kShare: round2_(p.k - split),
     fSplit: fSplit,
-    fvShare: round2_(p.fv - fSplit),
-    fkShare: round2_(p.fk - fSplit),
+    fvShare: round2_(p.fsv - fSplit + p.fixedOwed),
+    fkShare: round2_(p.fsk - fSplit - p.fixedOwed),
+    // Each person's fixed bills: half the shared ones plus their own.
+    fixedV: round2_(fSplit + p.fOwnV),
+    fixedK: round2_(fSplit + p.fOwnK),
   };
   const pn = round2_(p.personal || 0);
   s.settle = settleText_(s.vShare, s.kShare);
@@ -683,28 +771,30 @@ function writeMonthSummary_(sheet, key, p, pb) {
     line('Fixed bills'),                                                              // 12
     line('V paid', 'K paid', 'Total'),                                                // 13
     line(p.fv, p.fk, p.fixed),                                                        // 14
-    line('Settle up', s.fixedSettle),                                                 // 15
-    blank(),                                                                          // 16
-    line('Personal expenses'),                                                        // 17
-    line('', 'Own card', "Other's card (owed in full)"),                              // 18
-    line("K's expenses", p.kOnK, p.kOnV),                                             // 19
-    line("V's expenses", p.vOnV, p.vOnK),                                             // 20
-    line('Settle up', s.personalSettle),                                              // 21
-    line('Overall (joint + fixed + personal)', s.overall),                            // 22
-    blank(),                                                                          // 23
-    line('Budgets for ' + monthLabel_(key)),                                          // 24
-    line('Budget for', 'Budget', 'Spent', 'Left'),                                    // 25
-    p.hasBudget ? line('Joint', budget, p.spent, round2_(budget - p.spent)) : line('Joint', 'not set', p.spent, ''), // 26
-    pbLine('V'),                                                                      // 27
-    pbLine('K'),                                                                      // 28
-    blank(),                                                                          // 29
-    line('Colors'),                                                                   // 30
-    line('Joint', 'no color'),                                                        // 31
-    line('Personal V', 'expense for V'),                                              // 32
-    line('Personal K', 'expense for K'),                                              // 33
-    line('Fixed V', "V's card"),                                                      // 34
-    line('Fixed K', "K's card"),                                                      // 35
-    line('Settlement', 'paid back'),                                                  // 36
+    line('Shared (half each)', "V's own", "K's own", "V's fixed", "K's fixed"),       // 15
+    line(p.fShared, p.fOwnV, p.fOwnK, s.fixedV, s.fixedK),                            // 16
+    line('Settle up', s.fixedSettle),                                                 // 17
+    blank(),                                                                          // 18
+    line('Personal expenses'),                                                        // 19
+    line('', 'Own card', "Other's card (owed in full)"),                              // 20
+    line("K's expenses", p.kOnK, p.kOnV),                                             // 21
+    line("V's expenses", p.vOnV, p.vOnK),                                             // 22
+    line('Settle up', s.personalSettle),                                              // 23
+    line('Overall (joint + fixed + personal)', s.overall),                            // 24
+    blank(),                                                                          // 25
+    line('Budgets for ' + monthLabel_(key)),                                          // 26
+    line('Budget for', 'Budget', 'Spent', 'Left'),                                    // 27
+    p.hasBudget ? line('Joint', budget, p.spent, round2_(budget - p.spent)) : line('Joint', 'not set', p.spent, ''), // 28
+    pbLine('V'),                                                                      // 29
+    pbLine('K'),                                                                      // 30
+    blank(),                                                                          // 31
+    line('Colors'),                                                                   // 32
+    line('Joint', 'no color'),                                                        // 33
+    line('Personal V', 'expense for V'),                                              // 34
+    line('Personal K', 'expense for K'),                                              // 35
+    line('Fixed V', "V's card"),                                                      // 36
+    line('Fixed K', "K's card"),                                                      // 37
+    line('Settlement', 'paid back'),                                                  // 38
   ];
   // Clear the whole area first: rows deleted near the top can shift old values and colors into it.
   const area = sheet.getRange(1, SUMMARY_COL, Math.max(sheet.getLastRow(), out.length), WIDTH);
@@ -714,22 +804,24 @@ function writeMonthSummary_(sheet, key, p, pb) {
 
   const cell = (row, col, rows, cols) => sheet.getRange(row, SUMMARY_COL + col, rows || 1, cols || 1);
   [3, 5, 14].forEach((row) => cell(row, 0, 1, 3).setNumberFormat(MONEY));
-  cell(19, 1, 2, 2).setNumberFormat(MONEY);
-  cell(26, 1, 3, 3).setNumberFormat(MONEY);
-  [1, 12, 17, 24, 30].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
-  [2, 4, 13, 18].forEach((row) => cell(row, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6'));
-  cell(25, 0, 1, 4).setFontWeight('bold').setBackground('#f3f4f6');
-  cell(26, 3, 3, 1).setFontWeight('bold');
-  cell(19, 0, 2, 1).setFontWeight('bold');
-  [6, 7, 8, 9, 10, 15, 21, 22].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
+  cell(16, 0, 1, 5).setNumberFormat(MONEY);
+  cell(21, 1, 2, 2).setNumberFormat(MONEY);
+  cell(28, 1, 3, 3).setNumberFormat(MONEY);
+  [1, 12, 19, 26, 32].forEach((row) => cell(row, 0).setFontWeight('bold').setFontSize(12));
+  [2, 4, 13, 20].forEach((row) => cell(row, 0, 1, 3).setFontWeight('bold').setBackground('#f3f4f6'));
+  cell(15, 0, 1, 5).setFontWeight('bold').setBackground('#f3f4f6');
+  cell(27, 0, 1, 4).setFontWeight('bold').setBackground('#f3f4f6');
+  cell(28, 3, 3, 1).setFontWeight('bold');
+  cell(21, 0, 2, 1).setFontWeight('bold');
+  [6, 7, 8, 9, 10, 17, 23, 24].forEach((row) => cell(row, 0, 1, 2).setFontWeight('bold'));
   // Status: green once cleared, amber while something is still owed.
   if (s.status === 'Cleared') cell(10, 0, 1, 2).setBackground(COLORS.settled);
   else if (s.status !== 'Even') cell(10, 0, 1, 2).setBackground(COLORS.open);
-  cell(32, 0).setBackground(COLORS.personalV);
-  cell(33, 0).setBackground(COLORS.personalK);
-  cell(34, 0).setBackground(COLORS.fixedV);
-  cell(35, 0).setBackground(COLORS.fixedK);
-  cell(36, 0).setBackground(COLORS.settled);
+  cell(34, 0).setBackground(COLORS.personalV);
+  cell(35, 0).setBackground(COLORS.personalK);
+  cell(36, 0).setBackground(COLORS.fixedV);
+  cell(37, 0).setBackground(COLORS.fixedK);
+  cell(38, 0).setBackground(COLORS.settled);
 }
 
 // The "Sirikh" tab: one row per month, newest first. Settled and Status show whether the month's
@@ -737,7 +829,7 @@ function writeMonthSummary_(sheet, key, p, pb) {
 function writeOverview_(months) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(OVERVIEW_TAB) || ss.insertSheet(OVERVIEW_TAB, 0);
-  const HEAD = ['Month', 'Tab', 'Joint budget', 'Joint spent', 'Fixed bills', 'V personal spent', 'K personal spent',
+  const HEAD = ['Month', 'Tab', 'Joint budget', 'Joint spent', 'Fixed bills', 'V fixed', 'K fixed', 'V personal spent', 'K personal spent',
     'V personal left', 'K personal left', 'Joint settle', 'Fixed settle', 'Personal settle', 'Overall settle',
     'Settled', 'Status', 'Joint left'];
   const W = HEAD.length;
@@ -755,7 +847,7 @@ function writeOverview_(months) {
     const budget = round2_(p.start + p.added);
     const left = (b) => (b ? b.remaining : 'not set');
     statuses.push(s.status);
-    out.push([monthLabel_(m.key), tabName_(m.key), p.hasBudget ? budget : 'not set', p.spent, p.fixed, p.pv, p.pk,
+    out.push([monthLabel_(m.key), tabName_(m.key), p.hasBudget ? budget : 'not set', p.spent, p.fixed, s.fixedV, s.fixedK, p.pv, p.pk,
       left(m.pb.V), left(m.pb.K), s.settle, s.fixedSettle, s.personalSettle, s.overall, s.settledText, s.status,
       p.hasBudget ? round2_(budget - p.spent) : 'not set']);
   });
@@ -767,7 +859,7 @@ function writeOverview_(months) {
   sheet.getRange(4, 1, 1, W).setFontWeight('bold').setBackground('#f3f4f6');
   sheet.setFrozenRows(4);
   if (months.length) {
-    sheet.getRange(5, 3, months.length, 7).setNumberFormat(MONEY);
+    sheet.getRange(5, 3, months.length, 9).setNumberFormat(MONEY);
     sheet.getRange(5, W, months.length, 1).setNumberFormat(MONEY).setFontWeight('bold');
     statuses.forEach((st, i) => {
       if (st === 'Cleared') sheet.getRange(5 + i, W - 1).setBackground(COLORS.settled).setFontWeight('bold');
@@ -801,6 +893,15 @@ function state_(current, touched) {
   months.forEach((m) => m.rows.forEach((r, i) => { if (!isEmptyRow_(r)) all.push({ r: r, key: m.key, i: i, d: formatDate_(r[C.DATE], tz) }); }));
   all.sort((a, b) => (a.d !== b.d ? (a.d < b.d ? 1 : -1) : a.key !== b.key ? (a.key < b.key ? 1 : -1) : b.i - a.i));
 
+  MAIN_LIST_CACHE = all.map((x) => mainItem_(x));
+  const recentBy = {};
+  const recentTotal = { All: MAIN_LIST_CACHE.length };
+  Object.keys(RECENT_GROUPS).forEach((g) => {
+    const rows = MAIN_LIST_CACHE.filter((e) => RECENT_GROUPS[g].indexOf(e.type) !== -1);
+    recentBy[g] = rows.slice(0, RECENT_COUNT);
+    recentTotal[g] = rows.length;
+  });
+
   const budget = round2_(cur.p.start + cur.p.added);
   return {
     ok: true,
@@ -819,28 +920,48 @@ function state_(current, touched) {
       V: !cur.pb.V && !!(prev && prev.pb.V),
       K: !cur.pb.K && !!(prev && prev.pb.K),
     },
-    recent: all.slice(0, RECENT_COUNT).map((x) => ({
-      id: String(x.r[C.ID]),
-      date: x.d,
-      category: String(x.r[C.CATEGORY]),
-      amount: toNumber_(x.r[C.AMOUNT]),
-      paidBy: String(x.r[C.PAID_BY]),
-      notes: String(x.r[C.NOTES]),
-      type: normalizeType_(x.r[C.TYPE]),
-      balance: x.r[C.BALANCE],
-      expenseFor: ['Personal', 'Personal budget'].indexOf(normalizeType_(x.r[C.TYPE])) !== -1 ? owner_(x.r) : '',
-      tag: rowTag_(x.r, normalizeType_(x.r[C.TYPE])),
-    })),
+    recent: MAIN_LIST_CACHE.slice(0, RECENT_COUNT),
+    recentBy: recentBy,
+    recentTotal: recentTotal,
   };
+}
+
+// One month-tab row as the app's Recent list shows it.
+function mainItem_(x) {
+  const type = normalizeType_(x.r[C.TYPE]);
+  return {
+    id: String(x.r[C.ID]),
+    date: x.d,
+    category: String(x.r[C.CATEGORY]),
+    amount: toNumber_(x.r[C.AMOUNT]),
+    paidBy: String(x.r[C.PAID_BY]),
+    notes: String(x.r[C.NOTES]),
+    type: type,
+    balance: x.r[C.BALANCE],
+    expenseFor: type === 'Personal' || type === 'Personal budget' ? owner_(x.r) : type === 'Fixed' ? fixedOwner_(x.r) : '',
+    tag: rowTag_(x.r, type),
+  };
+}
+
+// Older entries for a Recent list: body.table ('main', 'car' or 'funds'), body.group (main only:
+// All, Joint, Fixed or Personal), body.offset and body.limit (up to LIST_MAX).
+function list_(body) {
+  const table = body.table === 'car' || body.table === 'funds' ? body.table : 'main';
+  const group = RECENT_GROUPS[body.group] ? body.group : 'All';
+  let rows = table === 'car' ? CAR_LIST_CACHE : table === 'funds' ? FUNDS_LIST_CACHE : MAIN_LIST_CACHE;
+  if (table === 'main' && group !== 'All') rows = rows.filter((e) => RECENT_GROUPS[group].indexOf(e.type) !== -1);
+  const offset = Math.max(0, Math.floor(Number(body.offset) || 0));
+  const limit = Math.min(LIST_MAX, Math.max(1, Math.floor(Number(body.limit) || 25)));
+  return { table: table, group: group, offset: offset, total: rows.length, rows: rows.slice(offset, offset + limit) };
 }
 
 // Spending across every month tab and the Sonata tab, summed by month, group, tag and person, for
 // the app's charts (it filters by year and month itself). Refunds count as negative spending;
-// budgets and settlements are not spending. Funds rows (income, 401(K), investments, loans,
+// budgets and settlements are not spending. Funds rows (income, 401(K), investments, Fam, loans,
 // savings used) come separately, by month, kind and person.
 //   spend: [month 'YYYY-MM', group (Joint, Fixed, Personal, Sonata), tag, who (V, K, Both), amount]
 //   funds: [month, kind, who, amount]
-const ANALYTICS_FUND_KINDS = ['Income', '401(K)', 'Investment', 'Loan payment', 'Use savings'];
+const ANALYTICS_FUND_KINDS = ['Income', '401(K)', 'Investment', 'Fam', 'Loan payment', 'Use savings'];
 function analytics_(months, carSheet) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   const spend = {};
@@ -852,7 +973,7 @@ function analytics_(months, carSheet) {
     if (isEmptyRow_(r)) return;
     const type = normalizeType_(r[C.TYPE]);
     if (type !== 'Joint' && type !== 'Fixed' && type !== 'Personal') return;
-    const who = type === 'Personal' ? owner_(r) : 'Both';
+    const who = type === 'Personal' ? owner_(r) : type === 'Fixed' ? fixedOwner_(r) : 'Both';
     const tag = rowTag_(r, type) || 'Other';
     add(spend, [m.key, type, tag, who].join('|'), [m.key, type, tag, who], toNumber_(r[C.AMOUNT]));
   }));
@@ -878,7 +999,7 @@ function analytics_(months, carSheet) {
     row[row.length - 1] = round2_(row[row.length - 1]);
     return row;
   }).filter((row) => row[row.length - 1] !== 0);
-  return { spend: done(spend), funds: done(funds), tags: TAGS, fixedTags: FIXED_TAGS, carTags: CAR_CATEGORIES };
+  return { spend: done(spend), funds: done(funds), tags: TAGS.concat(customTags_(months)), customTags: customTags_(months), fixedTags: FIXED_TAGS, carTags: CAR_CATEGORIES };
 }
 
 function normalizeType_(v) {
@@ -1333,13 +1454,15 @@ function carStats_(rows, math) {
     : s.settledNet > 0 ? 'K paid V $' + s.settledNet.toFixed(2)
     : s.settledNet < 0 ? 'V paid K $' + (-s.settledNet).toFixed(2) : '$' + s.settled.toFixed(2) + ' both ways';
   s.status = Math.abs(s.remaining) < 0.01 ? (s.settled ? 'Cleared' : 'Even') : 'Open: ' + s.settle;
-  s.recent = data.slice(-RECENT_COUNT).reverse().map((r) => ({
+  CAR_LIST_CACHE = data.slice().reverse().map((r) => ({
     id: String(r[K.ID]), date: formatDate_(r[K.DATE], tz), category: String(r[K.CATEGORY]), vendor: String(r[K.VENDOR]),
     amount: toNumber_(r[K.AMOUNT]), paidBy: String(r[K.PAID_BY]), notes: String(r[K.NOTES]),
     odometer: r[K.ODO], miles: r[K.MILES], mpg: r[K.MPG], eff: r[K.EFF], gallons: r[K.GAL], ppg: r[K.PPG], rangeLeft: r[K.RANGE],
     expenseFor: carOwner_(r), fill: r[K.CATEGORY] === 'Fuel' ? (isPartial_(r) ? 'Partial' : 'Full') : '',
     missedBefore: isMarkedMissed_(r),
   }));
+  s.recent = CAR_LIST_CACHE.slice(0, RECENT_COUNT);
+  s.recentTotal = CAR_LIST_CACHE.length;
   return s;
 }
 
@@ -1461,6 +1584,9 @@ function carState_(sheet) {
 //   401(K)            taken by the employer before pay; logged per paycheck. Person V or K. Not part
 //                     of income, spending or savings (it never reaches the bank); counts toward the goal
 //   Investment        401(K), India, USA... Person V or K. From: Income (this month) or Savings
+//   Fam               money sent to the family's investment account; Category = which Fam account
+//                     (optional). Person V, K or Both (half each). From: Income or Savings. Put away
+//                     like an investment (not spending), but it never counts toward the V & K goal
 //   Loan payment      a payment sent toward a loan; Category = which loan. Person V, K or Both
 //   Use savings       spending from savings kept in earlier months. Person V or K only: savings are
 //                     individual (V's from V's income, K's from K's income), never pooled
@@ -1469,14 +1595,15 @@ function carState_(sheet) {
 //   Savings target    no longer used (older rows are kept and ignored)
 //
 // Each month, per person; shared costs count half each and settlements are ignored:
-//   Spent    = Joint/2 + Fixed/2 + Personal + Sonata (half of joint, own turns) + loan payments
+//   Spent    = Joint/2 + shared Fixed/2 + own Fixed bills + Personal + Sonata (half of joint, own turns) + loan payments
 //   Invested = Investment rows from this month's income
-//   Savings  = Income - Spent - Invested           (the month's savings, not decided yet)
-//   Kept     = Invested + Savings = Income - Spent  Savings rate = Kept / Income
+//   Fam      = Fam rows from this month's income
+//   Savings  = Income - Spent - Invested - Fam     (the month's savings, not decided yet)
+//   Kept     = Invested + Fam + Savings = Income - Spent   Savings rate = Kept / Income
 // The month's savings already include any unspent joint budget (half each) and unspent personal
 // budget; the overview shows that breakdown, it is not added again.
-// Savings available = every earlier month's savings - savings used - invested from savings.
-// Goal (investments only, 401(K) included): each person aims for half the target; needed per month =
+// Savings available = every earlier month's savings - savings used - invested or sent to Fam from savings.
+// Goal (investments only, 401(K) included, Fam never): each person aims for half the target; needed per month =
 // still to go / months left including this one.
 // Generated tabs (never type in them): "Loans" and "VK", rebuilt with the Funds overview.
 // ======================================================================================
@@ -1486,11 +1613,11 @@ const LOANS_TAB = 'Loans';
 const VK_TAB = 'VK';
 const FUNDS_HEADERS = ['Date', 'Kind', 'Category', 'Amount ($)', 'Person', 'Notes', 'ID', 'From'];
 const F = { DATE: 0, KIND: 1, CATEGORY: 2, AMOUNT: 3, PERSON: 4, NOTES: 5, ID: 6, FROM: 7 };
-const FUND_KINDS = ['Income', '401(K)', 'Investment', 'Loan payment', 'Use savings', 'Prior investment', 'Goal', 'Savings target'];
+const FUND_KINDS = ['Income', '401(K)', 'Investment', 'Fam', 'Loan payment', 'Use savings', 'Prior investment', 'Goal', 'Savings target'];
 const FUNDS_SUMMARY_COL = 10; // column J
-const FUNDS_SUMMARY_WIDTH = 7; // J:P
+const FUNDS_SUMMARY_WIDTH = 8; // J:Q
 const FUND_COLORS = {
-  'Income': '#dcfce7', '401(K)': '#ddd6fe', 'Investment': '#e9d5ff', 'Prior investment': '#f3e8ff', 'Loan payment': '#fecaca',
+  'Income': '#dcfce7', '401(K)': '#ddd6fe', 'Investment': '#e9d5ff', 'Fam': '#ccfbf1', 'Prior investment': '#f3e8ff', 'Loan payment': '#fecaca',
   'Use savings': '#fef9c3', 'Goal': '#e0f2fe', 'Savings target': '#e0f2fe',
 };
 const RECAP_PROP = 'SIRIKH_RECAP_TO';
@@ -1499,6 +1626,7 @@ function fundKind_(v) {
   const s = String(v).trim().toLowerCase();
   if (s === 'use surplus') return 'Use savings';
   if (s === '401k' || s === '401 (k)' || s === '401(k)') return '401(K)';
+  if (s === 'fams' || s === 'family' || s === 'fam.') return 'Fam';
   for (let i = 0; i < FUND_KINDS.length; i++) if (FUND_KINDS[i].toLowerCase() === s) return FUND_KINDS[i];
   return '';
 }
@@ -1526,7 +1654,7 @@ const isMonthKey_ = (s) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(s));
 
 function validateFunds_(b) {
   const kind = fundKind_(b.kind);
-  if (!kind) throw new Error('Pick Income, Invest, Loan or Savings.');
+  if (!kind) throw new Error('Pick Income, Invest, Fam, Loan or Savings.');
   const date = String(b.date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Invalid date.');
   const amount = Number(b.amount);
@@ -1534,21 +1662,21 @@ function validateFunds_(b) {
   if (kind === 'Savings target' && amount > 95) throw new Error('Savings target is a percent of income (0 to 95).');
   let person = String(b.person || '').trim();
   if (person === 'Joint') person = 'Both';
-  const allowed = { 'Income': ['V', 'K', 'Both'], '401(K)': ['V', 'K'], 'Investment': ['V', 'K'], 'Loan payment': ['V', 'K', 'Both'], 'Use savings': ['V', 'K'],
+  const allowed = { 'Income': ['V', 'K', 'Both'], '401(K)': ['V', 'K'], 'Investment': ['V', 'K'], 'Fam': ['V', 'K', 'Both'], 'Loan payment': ['V', 'K', 'Both'], 'Use savings': ['V', 'K'],
     'Prior investment': ['V', 'K'] }[kind];
   if (allowed && allowed.indexOf(person) === -1) throw new Error('Person must be ' + allowed.join(', ').replace(/, ([^,]*)$/, ' or $1') + '.');
   if (!allowed) person = 'Both';
   let category = String(b.category || '').trim();
   if (kind === 'Goal' && !isMonthKey_(category)) throw new Error('Pick a deadline month.');
   if (!category) {
-    category = { 'Income': 'Salary', '401(K)': '401(K)', 'Investment': 'Investment', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
+    category = { 'Income': 'Salary', '401(K)': '401(K)', 'Investment': 'Investment', 'Fam': 'Fam', 'Loan payment': 'Loan', 'Use savings': 'Savings used',
       'Prior investment': 'Before tracking', 'Savings target': 'Savings target' }[kind] || '';
   }
   const from = String(b.from || '').trim();
   return {
     id: String(b.id || Utilities.getUuid()).slice(0, 64), date: date, kind: kind, category: safeText_(category.slice(0, 200)),
     amount: round2_(amount), person: person, notes: safeText_(String(b.notes || '').trim().slice(0, 500)),
-    from: kind === 'Investment' ? (from === 'Savings' || from === 'Surplus' ? 'Savings' : 'Income') : '',
+    from: kind === 'Investment' || kind === 'Fam' ? (from === 'Savings' || from === 'Surplus' ? 'Savings' : 'Income') : '',
   };
 }
 
@@ -1632,8 +1760,8 @@ function fundsModel_(today, fundsRows, months, carRows) {
   const rows = parseFunds_(fundsRows, tz);
   const incomeMonths = rows.filter((r) => r.kind === 'Income').map((r) => r.date.slice(0, 7)).sort();
   const start = incomeMonths.length && incomeMonths[0] < current ? incomeMonths[0] : current;
-  const blank = () => ({ income: { V: 0, K: 0 }, joint: 0, fixed: 0, personal: { V: 0, K: 0 }, carShared: 0, car: { V: 0, K: 0 },
-    invest: { V: 0, K: 0 }, investSaved: { V: 0, K: 0 }, loan: { V: 0, K: 0 }, used: { V: 0, K: 0 }, k401: { V: 0, K: 0 }, jointBudget: null, pb: { V: null, K: null } });
+  const blank = () => ({ income: { V: 0, K: 0 }, joint: 0, fixed: 0, fixedOwn: { V: 0, K: 0 }, personal: { V: 0, K: 0 }, carShared: 0, car: { V: 0, K: 0 },
+    invest: { V: 0, K: 0 }, investSaved: { V: 0, K: 0 }, fam: { V: 0, K: 0 }, famSaved: { V: 0, K: 0 }, loan: { V: 0, K: 0 }, used: { V: 0, K: 0 }, k401: { V: 0, K: 0 }, jointBudget: null, pb: { V: null, K: null } });
   const byMonth = {};
   for (let n = monthIndex_(start); n <= monthIndex_(current); n++) byMonth[keyOfIndex_(n)] = blank();
   const at = (key) => byMonth[key] || null;
@@ -1644,6 +1772,7 @@ function fundsModel_(today, fundsRows, months, carRows) {
     if (!m) return;
     if (r.kind === 'Income') add(m.income, split_(r.person, r.amount));
     if (r.kind === 'Investment') add(r.from === 'Savings' ? m.investSaved : m.invest, split_(r.person, r.amount));
+    if (r.kind === 'Fam') add(r.from === 'Savings' ? m.famSaved : m.fam, split_(r.person, r.amount));
     if (r.kind === 'Use savings') add(m.used, split_(r.person, r.amount));
     if (r.kind === 'Loan payment') add(m.loan, split_(r.person, r.amount));
     if (r.kind === '401(K)') add(m.k401, split_(r.person, r.amount));
@@ -1652,7 +1781,10 @@ function fundsModel_(today, fundsRows, months, carRows) {
     const m = at(mt.key);
     if (!m) return;
     m.joint += mt.p.spent;
-    m.fixed += mt.p.fixed;
+    // Shared bills half each; own bills (mobile lines) to their owner. Older periods have no split.
+    m.fixed += mt.p.fShared === undefined ? mt.p.fixed : mt.p.fShared;
+    m.fixedOwn.V += mt.p.fOwnV || 0;
+    m.fixedOwn.K += mt.p.fOwnK || 0;
     m.personal.V += mt.p.pv;
     m.personal.K += mt.p.pk;
     if (mt.p.hasBudget) m.jointBudget = mt.p.start + mt.p.added;
@@ -1672,8 +1804,8 @@ function fundsModel_(today, fundsRows, months, carRows) {
   const history = Object.keys(byMonth).sort().map((key) => {
     const m = byMonth[key];
     const who = (fn) => vk_({ V: fn('V'), K: fn('K') });
-    const spent = who((w) => m.joint / 2 + m.fixed / 2 + m.personal[w] + m.carShared / 2 + m.car[w] + m.loan[w]);
-    const savings = who((w) => m.income[w] - spent[w] - m.invest[w]);
+    const spent = who((w) => m.joint / 2 + m.fixed / 2 + m.fixedOwn[w] + m.personal[w] + m.carShared / 2 + m.car[w] + m.loan[w]);
+    const savings = who((w) => m.income[w] - spent[w] - m.invest[w] - m.fam[w]);
     const kept = who((w) => m.income[w] - spent[w]);
     const rateOf = (k, i) => (i > 0 ? round2_((k / i) * 100) : null);
     // Where the month's savings came from: unspent budgets first, the rest is unbudgeted income.
@@ -1682,21 +1814,24 @@ function fundsModel_(today, fundsRows, months, carRows) {
     const fromJoint = who(() => (jointLeft === null ? 0 : jointLeft / 2));
     const fromPersonal = who((w) => personalLeft[w] || 0);
     const before = vk_(carry);
-    carry = { V: carry.V + savings.V - m.used.V - m.investSaved.V, K: carry.K + savings.K - m.used.K - m.investSaved.K };
+    carry = { V: carry.V + savings.V - m.used.V - m.investSaved.V - m.famSaved.V, K: carry.K + savings.K - m.used.K - m.investSaved.K - m.famSaved.K };
     return {
       month: key, label: monthLabel_(key), income: vk_(m.income), joint: round2_(m.joint), fixed: round2_(m.fixed),
-      sonataShared: round2_(m.carShared), shared: who(() => m.joint / 2 + m.fixed / 2), personal: vk_(m.personal),
+      sonataShared: round2_(m.carShared), shared: who((w) => m.joint / 2 + m.fixed / 2 + m.fixedOwn[w]), personal: vk_(m.personal),
+      jointHalf: who(() => m.joint / 2), fixedEach: who((w) => m.fixed / 2 + m.fixedOwn[w]),
       sonata: who((w) => m.carShared / 2 + m.car[w]), loan: vk_(m.loan), spent: spent, invest: vk_(m.invest), savings: savings, kept: kept,
       rate: { V: rateOf(kept.V, m.income.V), K: rateOf(kept.K, m.income.K), total: rateOf(kept.total, m.income.V + m.income.K) },
       budgets: { jointBudget: m.jointBudget === null ? null : round2_(m.jointBudget), jointLeft: jointLeft, personalLeft: personalLeft,
         fromJoint: fromJoint, fromPersonal: fromPersonal, rest: vk_({ V: savings.V - fromJoint.V - fromPersonal.V, K: savings.K - fromJoint.K - fromPersonal.K }) },
-      investSaved: vk_(m.investSaved), used: vk_(m.used), savedBefore: before, savedAfter: vk_(carry), k401: vk_(m.k401),
+      investSaved: vk_(m.investSaved), used: vk_(m.used), fam: vk_(m.fam), famSaved: vk_(m.famSaved),
+      famAll: vk_({ V: m.fam.V + m.famSaved.V, K: m.fam.K + m.famSaved.K }), savedBefore: before, savedAfter: vk_(carry), k401: vk_(m.k401),
       putAway: vk_({ V: m.k401.V + m.invest.V + m.investSaved.V, K: m.k401.K + m.invest.K + m.investSaved.K }),
     };
   });
   const now = history[history.length - 1];
   // Savings you can use now: earlier months' savings minus what was used or invested from them (this month included).
-  const available = vk_({ V: now.savedBefore.V - now.used.V - now.investSaved.V, K: now.savedBefore.K - now.used.K - now.investSaved.K });
+  const available = vk_({ V: now.savedBefore.V - now.used.V - now.investSaved.V - now.famSaved.V,
+    K: now.savedBefore.K - now.used.K - now.investSaved.K - now.famSaved.K });
 
   // ---- goal (investments only)
   const goalRow = rows.filter((r) => r.kind === 'Goal').sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.i - b.i)).pop();
@@ -1745,6 +1880,23 @@ function fundsModel_(today, fundsRows, months, carRows) {
   const loanUsual = vk_({ V: recentLoan.length ? recentLoan.reduce((s, h) => s + h.loan.V, 0) / recentLoan.length : now.loan.V,
     K: recentLoan.length ? recentLoan.reduce((s, h) => s + h.loan.K, 0) / recentLoan.length : now.loan.K });
 
+  // Fam: money sent to the family's investment account, by account (never part of the goal).
+  const famMap = {};
+  const famTotal = { V: 0, K: 0 };
+  rows.filter((r) => r.kind === 'Fam').forEach((r) => {
+    const k = r.category.toLowerCase();
+    const a = famMap[k] || (famMap[k] = { name: r.category, thisMonth: 0, total: 0, V: 0, K: 0, last: '' });
+    const s = split_(r.person, r.amount);
+    a.total += r.amount; a.V += s.V; a.K += s.K;
+    add(famTotal, s);
+    if (r.date.slice(0, 7) === current) a.thisMonth += r.amount;
+    if (r.date > a.last) a.last = r.date;
+  });
+  const fams = Object.keys(famMap).map((k) => {
+    const a = famMap[k];
+    return { name: a.name, thisMonth: round2_(a.thisMonth), total: round2_(a.total), V: round2_(a.V), K: round2_(a.K), last: a.last };
+  }).sort((a, b) => b.total - a.total);
+
   // 401(K) so far, and each person's latest contribution (prefilled in the app; it can change any time).
   const k401Total = { V: 0, K: 0 };
   const k401Last = { V: null, K: null };
@@ -1756,7 +1908,7 @@ function fundsModel_(today, fundsRows, months, carRows) {
     .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : b.i - a.i))
     .map((r) => ({ date: r.date, loan: r.category, amount: r.amount, person: r.person, notes: r.notes }));
   return { month: current, today: today, start: start, now: now, available: available, history: history, goal: goal,
-    loans: loans, loanUsual: loanUsual,
+    loans: loans, loanUsual: loanUsual, fams: fams, famTotal: vk_(famTotal),
     k401Total: vk_(k401Total), k401Last: k401Last, loanPayments: loanPayments };
 }
 
@@ -1832,14 +1984,16 @@ function writeFundsSummary_(sheet, model) {
 
   line(['This month: ' + n.label, 'V', 'K', 'Total'], 'head');
   trio('Income (in hand)', n.income);
-  trio('Joint + Fixed (half each)', n.shared);
+  trio('Joint (half each)', n.jointHalf);
+  trio('Fixed (half of shared + own bills)', n.fixedEach);
   trio('Personal', n.personal);
   trio('Sonata (own turns + half joint)', n.sonata);
   trio('Loan payments', n.loan);
   trio('Spent (all inclusive)', n.spent);
   trio('Invested', n.invest);
+  trio('Fam (family account, not toward goal)', n.fam);
   trio('Savings this month', n.savings);
-  line(['Savings rate (invested + savings)', pct(n.rate.V), pct(n.rate.K), pct(n.rate.total)]);
+  line(['Savings rate (invested + Fam + savings)', pct(n.rate.V), pct(n.rate.K), pct(n.rate.total)]);
   gap();
   line(['401(K) (taken before pay)', 'V', 'K', 'Total'], 'head');
   trio('This month', n.k401);
@@ -1860,6 +2014,7 @@ function writeFundsSummary_(sheet, model) {
   trio('From earlier months', n.savedBefore);
   trio('Used this month', n.used);
   trio('Invested from savings', n.investSaved);
+  trio('Sent to Fam from savings', n.famSaved);
   trio('Available now', model.available);
   trio('After this month', n.savedAfter);
   const g = model.goal;
@@ -1880,9 +2035,15 @@ function writeFundsSummary_(sheet, model) {
     line(['Loan payments', 'This month', 'Total', 'V', 'K', 'Last paid'], 'head');
     model.loans.forEach((l) => line([l.name, l.thisMonth, l.total, l.V, l.K, l.last], 'money'));
   }
+  if (model.fams.length) {
+    gap();
+    line(['Fam (family investment, not toward goal)', 'This month', 'Total', 'V', 'K', 'Last sent'], 'head');
+    model.fams.forEach((a) => line([a.name, a.thisMonth, a.total, a.V, a.K, a.last], 'money'));
+    line(['All Fam', n.famAll.total, model.famTotal.total, model.famTotal.V, model.famTotal.K], 'money');
+  }
   gap();
-  line(['Month by month', 'Income', '401(K)', 'Spent', 'Invested', 'Savings', 'Savings total'], 'head');
-  model.history.slice().reverse().forEach((h) => line([h.label, h.income.total, h.k401.total, h.spent.total, h.invest.total, h.savings.total, h.savedAfter.total], 'money'));
+  line(['Month by month', 'Income', '401(K)', 'Spent', 'Invested', 'Fam', 'Savings', 'Savings total'], 'head');
+  model.history.slice().reverse().forEach((h) => line([h.label, h.income.total, h.k401.total, h.spent.total, h.invest.total, h.famAll.total, h.savings.total, h.savedAfter.total], 'money'));
   const tips = suggestions_(model);
   if (tips.length) {
     gap();
@@ -1943,28 +2104,28 @@ function writeLoansTab_(model) {
 // "VK": V and K side by side, one row per month (newest first), everything for each person.
 function writeVkTab_(model) {
   const sheet = generatedTab_(VK_TAB);
-  const cols = ['Month', 'Income (in hand)', '401(K)', 'Joint + Fixed (half)', 'Personal', 'Sonata', 'Loan payments', 'Spent',
-    'Invested', 'Savings', 'Savings rate', 'Savings total', 'Put away (401(K) + invested)'];
+  const cols = ['Month', 'Income (in hand)', '401(K)', 'Joint (half)', 'Fixed (half shared + own)', 'Personal', 'Sonata', 'Loan payments', 'Spent',
+    'Invested', 'Fam (not toward goal)', 'Savings', 'Savings rate', 'Savings total', 'Put away (401(K) + invested)'];
   const W = cols.length;
   const out = [];
   const heads = [];
   const pct = (x) => (x === null || x === undefined ? '' : x.toFixed(1) + '%');
   const line = (cells, head) => { out.push(cells.concat(new Array(W - cells.length).fill(''))); if (head) heads.push(out.length); };
   line(['V and K month by month (built from the Funds, month and Sonata tabs. Do not type here.)']);
-  line(['Shared costs count half each. Savings = income - spent - invested. 401(K) is taken before pay, so it is not in income or savings.']);
+  line(['Shared costs count half each. Savings = income - spent - invested - Fam (Fam includes what was sent from savings). 401(K) is taken before pay, so it is not in income or savings.']);
   ['V', 'K'].forEach((w) => {
     line([]);
     line([w === 'V' ? 'V' : 'K'], true);
     line(cols, true);
-    const sum = { income: 0, k401: 0, shared: 0, personal: 0, sonata: 0, loan: 0, spent: 0, invest: 0, savings: 0, putAway: 0 };
+    const sum = { income: 0, k401: 0, jointHalf: 0, fixedEach: 0, personal: 0, sonata: 0, loan: 0, spent: 0, invest: 0, famAll: 0, savings: 0, putAway: 0 };
     model.history.slice().reverse().forEach((h) => {
-      line([h.label, h.income[w], h.k401[w], h.shared[w], h.personal[w], h.sonata[w], h.loan[w], h.spent[w], h.invest[w], h.savings[w],
+      line([h.label, h.income[w], h.k401[w], h.jointHalf[w], h.fixedEach[w], h.personal[w], h.sonata[w], h.loan[w], h.spent[w], h.invest[w], h.famAll[w], h.savings[w],
         pct(h.rate[w]), h.savedAfter[w], h.putAway[w]]);
       Object.keys(sum).forEach((k) => { sum[k] += h[k][w]; });
     });
     const rate = sum.income > 0 ? ((sum.income - sum.spent) / sum.income) * 100 : null;
-    line(['All months', round2_(sum.income), round2_(sum.k401), round2_(sum.shared), round2_(sum.personal), round2_(sum.sonata), round2_(sum.loan),
-      round2_(sum.spent), round2_(sum.invest), round2_(sum.savings), pct(rate), model.now.savedAfter[w], round2_(sum.putAway)], true);
+    line(['All months', round2_(sum.income), round2_(sum.k401), round2_(sum.jointHalf), round2_(sum.fixedEach), round2_(sum.personal), round2_(sum.sonata), round2_(sum.loan),
+      round2_(sum.spent), round2_(sum.invest), round2_(sum.famAll), round2_(sum.savings), pct(rate), model.now.savedAfter[w], round2_(sum.putAway)], true);
   });
   writeBlock_(sheet, 1, 1, out, heads);
   sheet.getRange(1, 1).setFontWeight('bold');
@@ -1983,9 +2144,11 @@ function fundsState_(today, months, carSheet) {
   }
   model.suggestions = suggestions_(model);
   model.hasEntries = raw.length > 0;
-  model.recent = parseFunds_(raw, tz).sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : b.i - a.i))
-    .slice(0, RECENT_COUNT).map((r) => ({ id: r.id, date: r.date, kind: r.kind, category: r.category, amount: r.amount, person: r.person,
-      notes: r.notes, from: r.kind === 'Investment' ? r.from : '' }));
+  FUNDS_LIST_CACHE = parseFunds_(raw, tz).sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : b.i - a.i))
+    .map((r) => ({ id: r.id, date: r.date, kind: r.kind, category: r.category, amount: r.amount, person: r.person,
+      notes: r.notes, from: r.kind === 'Investment' || r.kind === 'Fam' ? r.from : '' }));
+  model.recent = FUNDS_LIST_CACHE.slice(0, RECENT_COUNT);
+  model.recentTotal = FUNDS_LIST_CACHE.length;
   model.recap = recapConfig_();
   return model;
 }
@@ -2045,6 +2208,7 @@ function recapText_(today, model, carRows) {
     (soFar <= lastSame ? usd0_(lastSame - soFar) + ' less' : usd0_(soFar - lastSame) + ' more') + ')' : '') + '.');
   lines.push('Last 7 days: ' + usd0_(week) + '.');
   if (n.income.total > 0) lines.push('Income ' + usd0_(n.income.total) + ', invested ' + usd0_(n.invest.total) + ', savings ' + usd0_(n.savings.total) + (n.rate.total !== null ? ' (' + Math.round(n.rate.total) + '% kept)' : '') + '.');
+  if (n.famAll.total > 0) lines.push('Fam this month: ' + usd0_(n.famAll.total) + ' (V ' + usd0_(n.famAll.V) + ', K ' + usd0_(n.famAll.K) + '), not part of the goal.');
   if (n.k401.total > 0) lines.push('401(K) this month: ' + usd0_(n.k401.total) + ' (V ' + usd0_(n.k401.V) + ', K ' + usd0_(n.k401.K) + ').');
   lines.push('Savings available from earlier months: ' + usd0_(model.available.total) + '.');
   if (model.goal) lines.push('Goal ' + usd0_(model.goal.target) + ' by ' + model.goal.deadlineLabel + ': ' + model.goal.percent.toFixed(1) + '% done, ' + usd0_(model.goal.need.total) + ' a month needed (' + (model.goal.onTrack ? 'on track' : 'behind') + ').');

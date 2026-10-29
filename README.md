@@ -11,11 +11,12 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - Every other page shows its own cards and a form for that type only.
 - **Entry form:** Category, Tag, Amount, Refund, Expense for, Card used, Date (calendar, defaults to today), Notes. The type comes from the page.
   - **Card used:** whose card paid (V's card or K's card).
-  - **Expense for:** whose expense it is. Personal: V or K. Sonata: V or K (whose turn) or Joint. Joint and Fixed are always shared.
-  - **Owed in full:** a one-person expense on the other person's card is owed back in full. Example: K orders ramen for herself and it goes on V's card, so K owes V the whole amount. The app shows this before you save.
-  - **Joint and Personal:** Category is a plain typing field (no dropdown). **Tag** is a dropdown that says where the money went: Groceries, Dining out, Entertainment, Shopping, Household items, Subscriptions, Travel, Fuel, Transport, Health, Personal care, Gifts, Education, Other. It is picked for you as you type the Category (Costco: Groceries, Netflix: Subscriptions); change it if it is wrong, and the app remembers your choice for that Category next time.
-  - **Fixed:** Category is replaced by buttons for exactly five bills: Rent, Utilities, Electricity, Wi-Fi, Misc. The bill is also its tag.
-  - **Sonata and Funds** keep their own options as tags: the car category (Fuel, Servicing, Repairs...) and the Funds kind (Income, 401(K), Investment, Loan payment, Savings used).
+  - **Expense for:** whose expense it is. Personal: V or K. Fixed: Both (shared, split 50/50), V or K (that person's own bill, like each mobile line). Sonata: V or K (whose turn) or Joint. Joint is always shared.
+  - **Owed in full:** a one-person expense (Personal or Fixed) on the other person's card is owed back in full. Example: K orders ramen for herself and it goes on V's card, so K owes V the whole amount. The app shows this before you save.
+  - **Joint and Personal:** Category is a plain typing field (no dropdown). **Tag** is a dropdown that says where the money went: Groceries, Dining out, Entertainment, Shopping, Household items, Subscriptions, Travel, Fuel, Transport, Health, Personal care, Gifts, Education, Bills, Other. It is picked for you as you type the Category (Costco: Groceries, Netflix: Subscriptions, Verizon bill: Bills); change it if it is wrong, and the app remembers your choice for that Category next time.
+  - **Your own tags:** pick **Other** and a box appears to name your own tag (for example Pet care). It is saved with the entry, added to the dropdown on both phones and to the sheet's Tag dropdown, and shows up in the charts like any other tag. Leave the box empty to keep plain Other.
+  - **Fixed:** Category is replaced by buttons for six bills: Rent, Utilities, Electricity, Wi-Fi, Mobile bill, Misc. The bill is also its tag. **Expense for** says whose bill it is: Both (rent, utilities: split 50/50) or V or K for one person's own bill (each mobile line). Each bill remembers its last choice; a mobile bill starts as the card owner's.
+  - **Sonata and Funds** keep their own options as tags: the car category (Fuel, Servicing, Repairs...) and the Funds kind (Income, 401(K), Investment, Fam, Loan payment, Savings used).
   - The text under Type explains the selected type.
   - **Refund:** tick it for money back (a return, a price adjustment, a bill credit). It is saved as a negative amount, so it undoes the original expense everywhere: the budget goes back up, spending goes down, and what is owed goes down. Works for Joint, Fixed, Personal and Sonata (not fuel fill-ups or Funds). Typing a minus sign works too. Refunds show in green with the word "refund" in Recent and in green in the sheet.
 - **Budgets by page:** the budget card follows the page.
@@ -33,9 +34,9 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - V paid, K paid, Total.
   - V's share and K's share (what each paid minus half the total), and the Equal split.
   - A plain line such as "V owes K $140.50", plus an overall line that includes fixed bills.
-- **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total, and who owes whom for fixed bills.
+- **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total; Shared, V's own and K's own; **V's fixed** and **K's fixed** (half the shared bills plus their own bills, so you see what each person spends on fixed); and who owes whom for fixed bills (shared bills half each, an own bill on the other's card in full).
 - **Sonata (car):** the fourth Type option. Car costs and fuel go to their own **Sonata** tab. V and K take turns paying (V three tanks, K the fourth), so own turns owe nothing; Joint costs split 50/50. See "Sonata tab" below.
-- **Funds:** what comes in and what goes out: income, 401(K), investments, loan payments, savings, a savings goal, a payday plan and an optional weekly email. Kept in its own **Funds** tab, with two generated tabs: **Loans** and **VK**. See "Funds tab" below.
+- **Funds:** what comes in and what goes out: income, 401(K), investments, Fam (money sent to the family's investment account), loan payments, savings, a savings goal, a payday plan and an optional weekly email. Kept in its own **Funds** tab, with two generated tabs: **Loans** and **VK**. See "Funds tab" below.
 - **Where the money goes (Home):** spending analytics for any period.
   - **Filters:** Year (or All years), Month (or Whole year / All months) and Spending (All, Joint, Fixed, Personal, Personal V, Personal K, Sonata).
   - **Headline:** total spent, compared with the month before and the same month last year (a whole year is compared with the same months of last year, only months logged in both years), spending per day or per month, and income with the share of it spent.
@@ -54,7 +55,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   | Personal, K | Darker blue |
   | Fixed, V | Light orange |
   | Fixed, K | Darker orange |
-- **Recent list:** the last 10 entries with the running balance. Tap **x** to delete one.
+- **Recent list:** each page shows only its own entries: Joint shows Joint rows (plus budgets and settlements), Fixed only Fixed bills, Personal only Personal rows (plus personal budgets and settlements), Sonata only car entries, Funds only Funds entries; Home shows everything. The latest 10 show first; **Show more** loads 25 older ones at a time from the sheet (needs a connection), all the way back, and you can edit or delete any of them. Tap **x** to delete one.
 - **Edit:** tap the pencil on an entry in Recent. The form fills with it (a bar on top says what is being edited, with Cancel); change anything, including the date, type, card or amount, and tap **Save changes**. The same row in the sheet is rewritten and every total is recalculated. Moving the date to another month moves the row to that month's tab. Works offline too (the edit syncs later). Settlements and budgets are not edited this way: delete and record them again. Editing the goal opens the goal form.
 - **Offline:** entries saved without signal are kept on the phone and synced later. An hourglass marks unsynced entries.
 - **Security:** a shared key protects writes. The repo contains no sheet ID, key, or data.
@@ -86,6 +87,7 @@ Open **Funds** from the menu. It tracks what comes in and what goes out, apart f
 | Income | Money in hand after 401(K), insurance and taxes: Salary, Tax refund, Bonus, Other | V, K, or Both (half each) |
 | 401(K) | What the employer took from that paycheck before pay. Starts at the last amount logged for that person; change it when the contribution changes | V or K |
 | Invest | Money you put away from pay: India, USA, Other. **From:** this month's income, or Savings (money kept in earlier months) | V or K |
+| Fam | Money sent to the family's investment account. Optional: which Fam account (buttons appear after the first one you name). **From:** this month's income, or Savings. Counted as that person's investment (it lowers savings, it is not spending) but **never toward the V & K goal** | V, K, or Both (half each) |
 | Loan | What you sent toward a loan. Pick the loan (buttons appear after the first payment) or name a new one | V, K, or Both (half each) |
 | Savings | Spending from savings kept in earlier months, with what it was for | V or K only (savings are individual: V's from V's income, K's from K's) |
 
@@ -98,14 +100,16 @@ Log each paycheck as it arrives (V 3,138.18 and K 2,958.70 at the moment). Salar
 | Line | Formula |
 |---|---|
 | Income | Income entries dated this month |
-| Joint + Fixed | the month's Joint and Fixed spending, half each |
+| Joint | the month's Joint spending, half each |
+| Fixed | half of the shared Fixed bills, plus each person's own bills (mobile line) |
 | Personal | each person's own Personal spending (Expense For), whoever's card paid |
 | Sonata | joint car costs half each; V's and K's turns to their owner |
 | Loan payments | Loan entries this month (Both = half each) |
-| **Spent** | Joint/2 + Fixed/2 + Personal + Sonata + Loan payments |
+| **Spent** | Joint/2 + shared Fixed/2 + own Fixed + Personal + Sonata + Loan payments |
 | Invested | Invest entries from this month's income (401(K) is separate) |
-| **Savings** | Income - Spent - Invested: money kept but not decided on yet |
-| Kept | (Invested + Savings) / Income, the savings rate |
+| Fam | Fam entries from this month's income (not toward the goal) |
+| **Savings** | Income - Spent - Invested - Fam: money kept but not decided on yet |
+| Kept | (Invested + Fam + Savings) / Income, the savings rate |
 
 Settlements are ignored: they move money between V and K, not out of the household. Splitting shared costs half each also means whose card paid does not matter here.
 
@@ -113,13 +117,13 @@ Settlements are ignored: they move money between V and K, not out of the househo
 
 Example (October): income 6,096.88; spent 650 (joint 100, personal 50, loan 500); invested 2,327.60; savings 3,119.28 = joint budget left 605 + personal budget left 300 + rest of income 2,214.28.
 
-**Savings from earlier months:** every earlier month's savings, minus Savings entries (spent from it), minus Invest entries from Savings. Kept apart from this month; on the 1st, last month's savings join it. Your call whether to invest it or spend it.
+**Savings from earlier months:** every earlier month's savings, minus Savings entries (spent from it), minus Invest and Fam entries from Savings. Kept apart from this month; on the 1st, last month's savings join it. Your call whether to invest it or spend it.
 
 **Goal:** **Set goal** asks for a target, a deadline month and, the first time only, what each person had invested before tracking (prefilled V 243.60 and K 6,409.00 from the Fam. tab). The goal is split equally: each person aims for half. Only investments count; savings count once you invest them.
 
 | Number | Formula |
 |---|---|
-| Invested | 401(K) entries, Invest entries (from income or savings) and the before-tracking amounts |
+| Invested | 401(K) entries, Invest entries (from income or savings) and the before-tracking amounts. Fam never counts |
 | To go | half the target minus what that person has invested (never below 0) |
 | Months left | months from this month through the deadline month, both included |
 | Needed per month | To go / Months left, per person |
@@ -130,15 +134,17 @@ Suggestions: the monthly amount for each person, when your average would reach t
 
 **Loan payments:** simple logs. The card lists each loan with this month, total paid, and V / K.
 
+**Fam (family investment):** its own card shows what went to Fam this month (V, K and so far) and each Fam account with this month, total and V / K, so you can keep it steady month to month. Fam also has its own column in Month by month, the VK tab and the weekly email. Example: K has 1,500 of savings this month and sends 500 to her family's investment account: log Fam, K, From this month's income. K's savings drop to 1,000; K's goal progress does not change.
+
 **Payday plan:** after a Salary is logged for V or K, a short form shows that paycheck's 401(K) (the last amount) and suggests what to invest and what to send to a loan, then logs them in one tap (or Skip). It always leaves room to spend: at least 30% of the paycheck, or last month's spending per paycheck, whichever is more.
 
 **Weekly email (optional):** **Set up weekly email** on the Funds page, enter one or two addresses, and Save (or Save + send test). Every Sunday evening both get: spending so far vs last month by the same day, the last 7 days, income, invested and savings, savings from earlier months, the goal, loan payments, and the top next steps. It is sent from the Google account that owns the script; the addresses are kept in the script's settings, not in the app. Turning it off removes the weekly trigger.
 
-**Funds tab in the sheet:** Date | Kind | Category | Amount ($) | Person | Notes | ID (hidden) | From. Rows are colored by Kind (Income green, 401(K) violet, Invest purple, Loan red, Savings yellow, Goal blue). Columns J onward, rebuilt on every save, like the Sonata summary: This month (V, K, Total), 401(K), Where this month's savings come from, Savings (from earlier months, used, invested from, available now, after this month), Goal, Loan payments, Month by month (Income, 401(K), Spent, Invested, Savings, Savings total) and Suggestions. Do not type in columns J onward. Hand edits to entries in columns A to H recalculate everything.
+**Funds tab in the sheet:** Date | Kind | Category | Amount ($) | Person | Notes | ID (hidden) | From. Rows are colored by Kind (Income green, 401(K) violet, Invest purple, Fam teal, Loan red, Savings yellow, Goal blue). Columns J onward, rebuilt on every save, like the Sonata summary: This month (V, K, Total), 401(K), Where this month's savings come from, Savings (from earlier months, used, invested from, sent to Fam from, available now, after this month), Goal, Fam (each account), Loan payments, Month by month (Income, 401(K), Spent, Invested, Fam, Savings, Savings total) and Suggestions. Do not type in columns J onward. Hand edits to entries in columns A to H recalculate everything.
 
 **Loans tab (generated):** each loan with this month, total paid, V and K, and last paid; a month-by-month table with one column per loan; and every payment, newest first. Payments are logged in the app (Funds > Loan) and stored in the Funds tab; this tab only shows them. It appears with the first loan payment.
 
-**VK tab (generated):** V and K separately, one row per month (newest first) plus an All months row: Income (in hand), 401(K), Joint + Fixed (half), Personal, Sonata, Loan payments, Spent, Invested, Savings, Savings rate, Savings total, Put away (401(K) + invested).
+**VK tab (generated):** V and K separately, one row per month (newest first) plus an All months row: Income (in hand), 401(K), Joint (half), Fixed (half shared + own), Personal, Sonata, Loan payments, Spent, Invested, Fam, Savings, Savings rate, Savings total, Put away (401(K) + invested; Fam is not included because it is not part of the goal).
 
 Do not type in the Loans or VK tabs; they are rebuilt on every save.
 
@@ -177,15 +183,15 @@ Each calendar month has its own tab, named like **Sirikh Oct 2026**, created aut
 - **Set it any time:** the latest Set balance row in a month is that month's joint budget, and every Joint expense dated in the month counts against it, even ones logged before it (the Costco row above). The same goes for Personal budget rows and each person's Personal expenses.
 - **Joint Left ($)** = the month's joint budget minus joint spending up to that row. Blank until a budget is set for the month.
 - **Type** is one of `Joint`, `Fixed`, `Personal`, `Set balance`, `Personal budget`, `Settlement` (or `Add funds` typed by hand). Blank counts as Joint.
-- **Expense For** is filled for Personal rows (V or K). Rows without it count as the card owner's.
-- **Tag** (a dropdown in the sheet too) is filled for Joint, Personal and Fixed rows. A blank Tag, such as on rows from before version 24 or rows typed by hand, is filled with a guess from the Category (anything unknown becomes Other). Pick another tag from the dropdown to change it; the charts follow.
+- **Expense For** is filled for Personal rows (V or K; rows without it count as the card owner's) and Fixed rows (Both, V or K; a blank Fixed row counts as shared).
+- **Tag** (a dropdown in the sheet too, including your own tags) is filled for Joint, Personal and Fixed rows. A blank Tag, such as on rows from before version 24 or rows typed by hand, is filled with a guess from the Category (anything unknown becomes Other). Pick another tag from the dropdown to change it; the charts follow.
 - **Row colors** come from Type, Expense For and Card Used, and update after hand edits.
 - **ID** prevents duplicates and identifies rows to delete. Do not edit it.
 
 **Tables in each month tab (column K onward)**, rebuilt on every save:
 
 1. **Who owes whom** for the month: V paid, K paid, Total; V's share, K's share, Equal split; Settle up (joint); Personal on other's card; Overall (joint + fixed + personal); **Settled**; **Status** (green Cleared or amber Open).
-2. **Fixed bills:** V paid, K paid, Total, Settle up.
+2. **Fixed bills:** V paid, K paid, Total; Shared, V's own, K's own, V's fixed, K's fixed; Settle up.
 3. **Personal expenses:** each person's Personal spending on their own card (nothing owed) and on the other's card (owed in full), Settle up, Overall.
 4. **Budgets for the month:** Budget, Spent and **Left** for Joint, V personal and K personal.
 5. **Colors:** a legend of the row colors.
@@ -196,7 +202,7 @@ Do not type in columns K onward; the script overwrites them. (Before version 24 
 
 The **Sirikh** tab is a month-by-month overview, newest month first, rebuilt on every save:
 
-Month | Tab | Joint budget | Joint spent | Fixed bills | V personal spent | K personal spent | V personal left | K personal left | Joint settle | Fixed settle | Personal settle | Overall settle | Settled | Status | **Joint left**
+Month | Tab | Joint budget | Joint spent | Fixed bills | V fixed | K fixed | V personal spent | K personal spent | V personal left | K personal left | Joint settle | Fixed settle | Personal settle | Overall settle | Settled | Status | **Joint left**
 
 The last column is what was left of that month's joint budget. Do not type in this tab.
 
@@ -311,7 +317,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Site shows 404 | `index.html` must be at the top level and Pages set to main, root. Make any commit to trigger a build. |
 | "Wrong key" | The app key must match `SIRIKH_KEY` exactly, including case. |
 | "Web app URL did not answer correctly" | Use the `/exec` URL from Apps Script, not the sheet URL or a `/dev` URL. Access must be **Anyone**. |
-| Fixed, Personal, Sonata or Funds entries, or edits, stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 24" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
+| Fixed, Personal, Sonata or Funds entries, or edits, stay on the phone with an hourglass, or Fixed shows as Joint in the sheet | The sheet's Apps Script is an older version. Paste the latest `Code.gs`, then Deploy > Manage deployments > pencil > Version: New version > Deploy. Opening the `/exec` link should say "Version 25" or higher. If you made a New deployment instead, paste its new `/exec` URL into the app's settings. |
 | "SIRIKH_KEY is not set" | Add the script property (Backend, step 3). |
 | `Code.gs` changes have no effect | Deploy a new version of the existing deployment. |
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |
