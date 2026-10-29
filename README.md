@@ -36,7 +36,7 @@ The site is live at: https://vedsirimalla.github.io/SIRIKH/
   - A plain line such as "V owes K $140.50", plus an overall line that includes fixed bills.
 - **Fixed bills:** tracked separately from the monthly budget, with V paid, K paid, Total; Shared, V's own and K's own; **V's fixed** and **K's fixed** (half the shared bills plus their own bills, so you see what each person spends on fixed); and who owes whom for fixed bills (shared bills half each, an own bill on the other's card in full).
 - **Sonata (car):** the fourth Type option. Car costs and fuel go to their own **Sonata** tab. V and K take turns paying (V three tanks, K the fourth), so own turns owe nothing; Joint costs split 50/50. See "Sonata tab" below.
-- **Funds:** what comes in and what goes out: income, 401(K), investments, Fam (money sent to the family's investment account), loan payments, savings, a savings goal, a payday plan and an optional weekly email. Kept in its own **Funds** tab, with two generated tabs: **Loans** and **VK**. See "Funds tab" below.
+- **Funds:** what comes in and what goes out: income, 401(K), investments, Fam (money sent to the family's investment account), loan payments, savings, a savings goal, a payday plan and an optional email recap (daily, weekly, every 2 weeks or monthly). Kept in its own **Funds** tab, with two generated tabs: **Loans** and **VK**. See "Funds tab" below.
 - **Where the money goes (Home):** spending analytics for any period.
   - **Filters:** Year (or All years), Month (or Whole year / All months) and Spending (All, Joint, Fixed, Personal, Personal V, Personal K, Sonata).
   - **Headline:** total spent, compared with the month before and the same month last year (a whole year is compared with the same months of last year, only months logged in both years), spending per day or per month, and income with the share of it spent.
@@ -134,11 +134,24 @@ Suggestions: the monthly amount for each person, when your average would reach t
 
 **Loan payments:** simple logs. The card lists each loan with this month, total paid, and V / K.
 
-**Fam (family investment):** its own card shows what went to Fam this month (V, K and so far) and each Fam account with this month, total and V / K, so you can keep it steady month to month. Fam also has its own column in Month by month, the VK tab and the weekly email. Example: K has 1,500 of savings this month and sends 500 to her family's investment account: log Fam, K, From this month's income. K's savings drop to 1,000; K's goal progress does not change.
+**Fam (family investment):** its own card shows what went to Fam this month (V, K and so far) and each Fam account with this month, total and V / K, so you can keep it steady month to month. Fam also has its own column in Month by month, the VK tab and the email recap. Example: K has 1,500 of savings this month and sends 500 to her family's investment account: log Fam, K, From this month's income. K's savings drop to 1,000; K's goal progress does not change.
 
 **Payday plan:** after a Salary is logged for V or K, a short form shows that paycheck's 401(K) (the last amount) and suggests what to invest and what to send to a loan, then logs them in one tap (or Skip). It always leaves room to spend: at least 30% of the paycheck, or last month's spending per paycheck, whichever is more.
 
-**Weekly email (optional):** **Set up weekly email** on the Funds page, enter one or two addresses, and Save (or Save + send test). Every Sunday evening both get: spending so far vs last month by the same day, the last 7 days, income, invested and savings, savings from earlier months, the goal, loan payments, and the top next steps. It is sent from the Google account that owns the script; the addresses are kept in the script's settings, not in the app. Turning it off removes the weekly trigger.
+**Email recap (optional):** **Set up email recap** on the Funds page, enter one or two addresses, pick **How often** (Daily, Weekly, Every 2 weeks, Monthly), the **Day** (a weekday, or a day of the month from 1 to 28) and the **Time**, then Save (or Save + send test).
+
+- What it says: spending so far this month vs last month by the same day, the recent days (today, last 7 or last 14 days), income, invested, Fam, savings, savings from earlier months, the goal, loan payments and the top next steps. A monthly email starts with last month's full picture (spent, invested, Fam, savings, % kept).
+- When it arrives: Google runs it some time within the chosen hour, in the script's time zone (Apps Script > Project Settings > Time zone; set it to America/New_York).
+- Is it working: the card on the Funds page shows **Last recap sent ...** or **Last recap failed ...: the reason**, and warns if the schedule is missing from the script. Save + send test sends one right away and shows any error.
+- It is sent from the Google account that owns the script; the addresses and schedule are kept in the script's settings, not in the app. Turning it off removes the trigger.
+
+**Getting it to work the first time**
+
+1. Paste the latest `Code.gs` and deploy a New version of the existing deployment. Opening the `/exec` link should say Version 26.
+2. In the Apps Script editor, pick `weeklyRecap` in the function list and click **Run**. Approve every permission it asks for (send email as you, run when you are not present). Without this step Google blocks the email and nothing arrives.
+3. In the app, open Funds > Set up email recap, enter the addresses, pick the schedule and tap **Save + send test**. The card should say "Last test sent ...".
+4. Check the inbox and the spam folder. Mark the first one as Not spam.
+5. In Apps Script > **Triggers** (the clock icon) there should be one `weeklyRecap` trigger with your schedule; **Executions** lists every run and its error, if any.
 
 **Funds tab in the sheet:** Date | Kind | Category | Amount ($) | Person | Notes | ID (hidden) | From. Rows are colored by Kind (Income green, 401(K) violet, Invest purple, Fam teal, Loan red, Savings yellow, Goal blue). Columns J onward, rebuilt on every save, like the Sonata summary: This month (V, K, Total), 401(K), Where this month's savings come from, Savings (from earlier months, used, invested from, sent to Fam from, available now, after this month), Goal, Fam (each account), Loan payments, Month by month (Income, 401(K), Spent, Invested, Fam, Savings, Savings total) and Suggestions. Do not type in columns J onward. Hand edits to entries in columns A to H recalculate everything.
 
@@ -308,7 +321,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 
 - **App files:** upload the new versions to GitHub. Phones get them the next time the app opens online.
 - **`Code.gs`:** paste the new code, then go to **Deploy > Manage deployments > Edit (pencil) > Version: New version > Deploy**. The URL stays the same. An older Sirikh tab is upgraded in place, and its old rows count as Joint.
-- **Version 20 and later ask for permission once:** the weekly email needs "Send email as you" and "Allow this application to run when you are not present". Run any function once in the editor (for example select `weeklyRecap` and click Run) and approve, or approve when Apps Script prompts during deploy. Nothing is emailed until you set it up in the app.
+- **Version 20 and later ask for permission once:** the email recap needs "Send email as you" and "Allow this application to run when you are not present". Run any function once in the editor (for example select `weeklyRecap` and click Run) and approve, or approve when Apps Script prompts during deploy. Nothing is emailed until you set it up in the app.
 
 ## Troubleshooting
 
@@ -323,4 +336,7 @@ Open https://vedsirimalla.github.io/SIRIKH/ in **Safari**, then tap **Share > Ad
 | Balance looks wrong | Check the Type column in the Sirikh tab. Fixing a row recalculates the balance. |
 | No charts on Home, or "Charts need the Apps Script at version 24" | Paste the latest `Code.gs` and deploy a New version, then open the app online once. Entries with a tag wait on the phone (hourglass) until then. |
 | Old home screen icon | Remove it and add it again from Safari. |
-| Weekly email: "You do not have permission" or no email | In Apps Script, select `weeklyRecap`, click Run and approve the permissions. Then save the weekly email again in the app. Check the spam folder for the first one. |
+| Email recap: "You do not have permission", "Last recap failed", or no email | In Apps Script, select `weeklyRecap`, click Run and approve the permissions. Then open Set up email recap in the app and tap Save + send test. Check the spam folder for the first one. |
+| Email recap: the card says the schedule is missing | Open Set up email recap and tap Save; that creates the trigger again. |
+| Email recap comes at the wrong hour | Set the script's time zone in Apps Script > Project Settings, then save the recap again in the app. |
+| Picked daily or monthly but it still comes on Sunday | The script is older than version 26. Paste the latest `Code.gs` and deploy a New version, then save the recap again. |

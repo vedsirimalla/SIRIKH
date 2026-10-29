@@ -49,7 +49,7 @@
  * entries on the left, an overview (this month, 401(K), savings, goal, loan payments, month by month)
  * from column J. Two more tabs are rebuilt from it: "Loans" (each loan month by month and every
  * payment) and "VK" (V and K side by side, month over month). See the Funds section at the end of
- * this file. An optional weekly email recap runs from a time-based trigger.
+ * this file. An optional email recap (daily, weekly, every 2 weeks or monthly) runs from a time-based trigger.
  *
  * Car expenses and fuel tracking live in their own "Sonata" tab (see the Sonata section
  * at the end of this file). They never mix with the monthly tabs, their budgets or their split.
@@ -61,7 +61,7 @@ const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'Ju
   'October', 'November', 'December'];
 const MONTH_TAB_RE = /^Sirikh (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
 // The app checks this. Bump it whenever the app starts depending on something new in this file.
-const BACKEND_VERSION = 25;
+const BACKEND_VERSION = 26;
 const HEADERS = ['Date', 'Category', 'Amount ($)', 'Card Used', 'Notes', 'Type', 'Joint Left ($)', 'ID', 'Expense For', 'Tag'];
 const C = { DATE: 0, CATEGORY: 1, AMOUNT: 2, PAID_BY: 3, NOTES: 4, TYPE: 5, BALANCE: 6, ID: 7, FOR: 8, TAG: 9 };
 // Tags for Joint and Personal expenses (the app's dropdown). Fixed bills use their bill as the tag,
@@ -181,7 +181,17 @@ function doPost(e) {
       result.car = carState_(carSheet);
       result.funds = fundsState_(today, MONTHS_CACHE, carSheet);
       result.analytics = analytics_(MONTHS_CACHE, carSheet);
-      if (body.action === 'recap' && body.test) result.recapSent = sendRecap_(today);
+      // A test send reports a mail error instead of failing the whole save (the schedule is already saved).
+      if (body.action === 'recap' && body.test) {
+        try {
+          result.recapSent = sendRecap_(today, 'test');
+        } catch (err) {
+          logRecap_(false, 'test', err && err.message || err);
+          result.recapSent = false;
+          result.recapError = String((err && err.message) || err);
+        }
+        result.funds.recap = recapConfig_();
+      }
       if (body.action === 'list') result.list = list_(body);
     } finally {
       lock.releaseLock();
@@ -1941,7 +1951,7 @@ function goalSuggestions_(g, now, available) {
   return out;
 }
 
-// One list of the most useful next steps, for the overview, the app and the weekly email.
+// One list of the most useful next steps, for the overview, the app and the email recap.
 function suggestions_(model) {
   const out = [];
   if (model.goal) out.push.apply(out, model.goal.suggestions);
@@ -2153,15 +2163,49 @@ function fundsState_(today, months, carSheet) {
   return model;
 }
 
-// ---- Weekly email recap (Sunday evening), optional.
+// ---- Email recap, optional: daily, weekly, every 2 weeks or monthly, at a chosen hour.
+// Settings live in Script Properties (never in the app or the repo):
+//   SIRIKH_RECAP_TO    the addresses, comma separated ('' = off)
+//   SIRIKH_RECAP_PLAN  {"freq":"weekly","day":0,"hour":18}  day = 0 (Sun) to 6 (Sat), or 1 to 28 for monthly
+//   SIRIKH_RECAP_LAST  the last send: {"at","ok","error","kind"}, shown in the app so failures are visible
+// The trigger runs within the chosen hour (Google picks the minute), in the script's time zone.
+const RECAP_PLAN_PROP = 'SIRIKH_RECAP_PLAN';
+const RECAP_LAST_PROP = 'SIRIKH_RECAP_LAST';
+const RECAP_FREQS = ['daily', 'weekly', 'biweekly', 'monthly'];
+const WEEKDAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+const RECAP_DEFAULT = { freq: 'weekly', day: 0, hour: 18 }; // what version 24 and earlier did
+
+function recapPlan_() {
+  try {
+    const p = JSON.parse(PropertiesService.getScriptProperties().getProperty(RECAP_PLAN_PROP) || 'null');
+    if (p && RECAP_FREQS.indexOf(p.freq) !== -1) return p;
+  } catch (err) { /* fall through to the default */ }
+  return RECAP_DEFAULT;
+}
+
 function recapConfig_() {
-  const to = PropertiesService.getScriptProperties().getProperty(RECAP_PROP) || '';
-  return { to: to, on: !!to };
+  const props = PropertiesService.getScriptProperties();
+  const to = props.getProperty(RECAP_PROP) || '';
+  let last = null;
+  try { last = JSON.parse(props.getProperty(RECAP_LAST_PROP) || 'null'); } catch (err) { last = null; }
+  let triggers = 0;
+  try { triggers = ScriptApp.getProjectTriggers().filter((t) => t.getHandlerFunction() === 'weeklyRecap').length; } catch (err) { triggers = -1; }
+  let quota = null;
+  try { quota = MailApp.getRemainingDailyQuota(); } catch (err) { quota = null; }
+  const plan = recapPlan_();
+  return { to: to, on: !!to, freq: plan.freq, day: plan.day, hour: plan.hour, tz: Session.getScriptTimeZone(),
+    triggers: triggers, last: last, quota: quota };
 }
 
 function setRecap_(body) {
   const props = PropertiesService.getScriptProperties();
   const list = String(body.to || '').split(/[,;\s]+/).filter(Boolean);
+  const freq = RECAP_FREQS.indexOf(body.freq) !== -1 ? body.freq : RECAP_DEFAULT.freq;
+  const hour = Math.floor(Number(body.hour));
+  const day = Math.floor(Number(body.day));
+  const plan = { freq: freq, hour: hour >= 0 && hour <= 23 ? hour : RECAP_DEFAULT.hour, day: 0 };
+  if (freq === 'monthly') plan.day = day >= 1 && day <= 28 ? day : 1;
+  else if (freq !== 'daily') plan.day = day >= 0 && day <= 6 ? day : 0;
   if (body.on) {
     if (!list.length || list.some((x) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x))) throw new Error('Enter one or two email addresses.');
     if (list.length > 5) throw new Error('Up to 5 email addresses.');
@@ -2169,8 +2213,19 @@ function setRecap_(body) {
   } else {
     props.setProperty(RECAP_PROP, '');
   }
+  props.setProperty(RECAP_PLAN_PROP, JSON.stringify(plan));
   ScriptApp.getProjectTriggers().forEach((t) => { if (t.getHandlerFunction() === 'weeklyRecap') ScriptApp.deleteTrigger(t); });
-  if (body.on) ScriptApp.newTrigger('weeklyRecap').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY).atHour(18).create();
+  if (!body.on) return;
+  const clock = ScriptApp.newTrigger('weeklyRecap').timeBased();
+  if (plan.freq === 'daily') clock.everyDays(1).atHour(plan.hour).create();
+  else if (plan.freq === 'monthly') clock.onMonthDay(plan.day).atHour(plan.hour).create();
+  else clock.everyWeeks(plan.freq === 'biweekly' ? 2 : 1).onWeekDay(ScriptApp.WeekDay[WEEKDAYS[plan.day]]).atHour(plan.hour).create();
+}
+
+// Records how the last send went, so the app can show "Last sent ..." or the error.
+function logRecap_(ok, kind, error) {
+  PropertiesService.getScriptProperties().setProperty(RECAP_LAST_PROP,
+    JSON.stringify({ at: new Date().toISOString(), ok: ok, kind: kind, error: error ? String(error).slice(0, 300) : '' }));
 }
 
 // Household spending (Joint, Fixed, Personal, Sonata) per day of a month, from the cached month rows.
@@ -2191,8 +2246,11 @@ function spendByDay_(key, carRows, tz) {
   return days;
 }
 
-function recapText_(today, model, carRows) {
+const RECAP_WORDS = { daily: 'daily', weekly: 'weekly', biweekly: 'every 2 weeks', monthly: 'monthly' };
+
+function recapText_(today, model, carRows, freq) {
   const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+  const span = { daily: 1, weekly: 7, biweekly: 14 }[freq] || 7; // days covered by "Last N days" 
   const key = today.slice(0, 7);
   const day = Number(today.slice(8, 10));
   const cur = spendByDay_(key, carRows, tz);
@@ -2200,39 +2258,60 @@ function recapText_(today, model, carRows) {
   const sum = (a, from, to) => a.slice(from, to + 1).reduce((s, x) => s + x, 0);
   const soFar = sum(cur, 1, day);
   const lastSame = sum(prev, 1, Math.min(day, 31));
-  let week = sum(cur, Math.max(1, day - 6), day);
-  if (day < 7) week += sum(prev, daysInMonth_(previousKey_(key)) - (6 - day), 31);
+  // The last `span` days, reaching into last month near the start of a month.
+  let recent = sum(cur, Math.max(1, day - span + 1), day);
+  if (day < span) recent += sum(prev, daysInMonth_(previousKey_(key)) - (span - day) + 1, 31);
   const lines = [];
   const n = model.now;
+  // Monthly: last month's full picture first (the email usually goes out early in the month).
+  const lastMonth = model.history.find((h) => h.month === previousKey_(key));
+  if (freq === 'monthly' && lastMonth) {
+    lines.push(lastMonth.label + ': spent ' + usd0_(lastMonth.spent.total) + ', invested ' + usd0_(lastMonth.invest.total) +
+      (lastMonth.famAll && lastMonth.famAll.total ? ', Fam ' + usd0_(lastMonth.famAll.total) : '') + ', savings ' + usd0_(lastMonth.savings.total) +
+      (lastMonth.rate.total !== null ? ' (' + Math.round(lastMonth.rate.total) + '% kept)' : '') + '.');
+  }
   lines.push('Spent in ' + n.label + ' so far: ' + usd0_(soFar) + (lastSame > 0 ? ' (last month by the same day: ' + usd0_(lastSame) + ', ' +
     (soFar <= lastSame ? usd0_(lastSame - soFar) + ' less' : usd0_(soFar - lastSame) + ' more') + ')' : '') + '.');
-  lines.push('Last 7 days: ' + usd0_(week) + '.');
+  if (freq !== 'monthly') lines.push((span === 1 ? 'Today' : 'Last ' + span + ' days') + ': ' + usd0_(recent) + '.');
   if (n.income.total > 0) lines.push('Income ' + usd0_(n.income.total) + ', invested ' + usd0_(n.invest.total) + ', savings ' + usd0_(n.savings.total) + (n.rate.total !== null ? ' (' + Math.round(n.rate.total) + '% kept)' : '') + '.');
   if (n.famAll.total > 0) lines.push('Fam this month: ' + usd0_(n.famAll.total) + ' (V ' + usd0_(n.famAll.V) + ', K ' + usd0_(n.famAll.K) + '), not part of the goal.');
   if (n.k401.total > 0) lines.push('401(K) this month: ' + usd0_(n.k401.total) + ' (V ' + usd0_(n.k401.V) + ', K ' + usd0_(n.k401.K) + ').');
   lines.push('Savings available from earlier months: ' + usd0_(model.available.total) + '.');
   if (model.goal) lines.push('Goal ' + usd0_(model.goal.target) + ' by ' + model.goal.deadlineLabel + ': ' + model.goal.percent.toFixed(1) + '% done, ' + usd0_(model.goal.need.total) + ' a month needed (' + (model.goal.onTrack ? 'on track' : 'behind') + ').');
   if (n.loan.total > 0) lines.push('Loan payments this month: ' + usd0_(n.loan.total) + ' (' + model.loans.filter((l) => l.thisMonth > 0).map((l) => l.name + ' ' + usd0_(l.thisMonth)).join(', ') + ').');
-  return { subject: 'Sirikh weekly: ' + usd0_(soFar) + ' spent in ' + n.label.split(' ')[0], lines: lines };
+  const word = RECAP_WORDS[freq] || 'weekly';
+  return { title: 'Sirikh ' + word, subject: 'Sirikh ' + word + ': ' + usd0_(soFar) + ' spent in ' + n.label.split(' ')[0], lines: lines };
 }
 
-// Runs from the weekly trigger (and "Send a test" in the app).
+// Runs from the recap trigger (any frequency; the name is kept so older triggers still work).
+// Run it once from the Apps Script editor to approve the email permissions and send one right away.
 function weeklyRecap() {
-  sendRecap_(todayStr_());
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000); // a phone may be saving at the same moment
+  try {
+    sendRecap_(todayStr_(), 'scheduled');
+  } catch (err) {
+    logRecap_(false, 'scheduled', err && err.message || err);
+    throw err; // also shows in Apps Script > Executions and in Google's failure email
+  } finally {
+    lock.releaseLock();
+  }
 }
 
-function sendRecap_(today) {
-  const to = recapConfig_().to;
+// Sends the recap now. Returns true when sent, false when no address is set; throws on a mail error.
+function sendRecap_(today, kind) {
+  const to = PropertiesService.getScriptProperties().getProperty(RECAP_PROP) || '';
   if (!to) return false;
   state_(today.slice(0, 7), []);
   const carSheet = getCarSheet_();
   const model = fundsState_(today, MONTHS_CACHE, carSheet);
-  const r = recapText_(today, model, readCarRows_(carSheet));
+  const r = recapText_(today, model, readCarRows_(carSheet), recapPlan_().freq);
   const tips = model.suggestions.slice(0, 4);
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const html = '<div style="font-family:-apple-system,Segoe UI,sans-serif;font-size:15px;line-height:1.5">' +
-    '<h2 style="color:#0f766e;margin:0 0 8px">Sirikh weekly</h2><ul>' + r.lines.map((l) => '<li>' + esc(l) + '</li>').join('') + '</ul>' +
+    '<h2 style="color:#0f766e;margin:0 0 8px">' + esc(r.title) + '</h2><ul>' + r.lines.map((l) => '<li>' + esc(l) + '</li>').join('') + '</ul>' +
     (tips.length ? '<p><b>Next steps</b></p><ul>' + tips.map((l) => '<li>' + esc(l) + '</li>').join('') + '</ul>' : '') + '</div>';
   MailApp.sendEmail({ to: to, subject: r.subject, body: r.lines.concat(tips.length ? ['', 'Next steps:'].concat(tips) : []).join('\n'), htmlBody: html });
+  logRecap_(true, kind || 'scheduled', '');
   return true;
 }

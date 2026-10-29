@@ -346,9 +346,10 @@
       </section>
 
       <section class="card" aria-labelledby="mRecapTitle">
-        <div id="mRecapTitle" class="eyebrow">Weekly email</div>
-        <div id="mRecapNote" class="pace">A short email every Sunday evening: spending vs last month, savings, goal and loan payments.</div>
-        <div class="row"><button type="button" id="recapBtn" class="full">Set up weekly email</button></div>
+        <div id="mRecapTitle" class="eyebrow">Email recap</div>
+        <div id="mRecapNote" class="pace">A short email on the schedule you pick (daily, weekly, every 2 weeks or monthly): spending vs last month, savings, Fam, goal and loan payments.</div>
+        <div id="mRecapStatus" class="status" hidden></div>
+        <div class="row"><button type="button" id="recapBtn" class="full">Set up email recap</button></div>
       </section>
     </div>
 
@@ -665,14 +666,31 @@
 
   <dialog id="recapDialog">
     <form method="dialog" id="recapForm" novalidate>
-      <h2>Weekly email</h2>
-      <p class="muted">Sent every Sunday evening from your Google account. Addresses are kept in the sheet's script settings, not in the app.</p>
+      <h2>Email recap</h2>
+      <p class="muted">Sent from the Google account that owns the sheet's script. Addresses and the schedule are kept in the script's settings, not in the app.</p>
       <label>Send to
         <input type="text" id="recapTo" placeholder="you@gmail.com, partner@gmail.com" autocomplete="off" autocapitalize="off">
       </label>
+      <div class="grid2">
+        <label>How often
+          <select id="recapFreq">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="biweekly">Every 2 weeks</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </label>
+        <label id="recapDayField"><span id="recapDayLabel">Day</span>
+          <select id="recapDay"></select>
+        </label>
+      </div>
+      <label>Time
+        <select id="recapHour"></select>
+        <span id="recapTz" class="field-hint"></span>
+      </label>
       <label class="check">
         <input type="checkbox" id="recapOn">
-        <span>Send the weekly email</span>
+        <span>Send the email recap</span>
       </label>
       <div class="row end">
         <button value="cancel" formnovalidate>Cancel</button>

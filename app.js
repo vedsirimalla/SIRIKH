@@ -2,7 +2,7 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const APP_VERSION = 27; // shown at the bottom of the app; matches the cache name in sw.js
+  const APP_VERSION = 28; // shown at the bottom of the app; matches the cache name in sw.js
   // Fixed bills are picked from this list (no typing); each has its own orange, same as the sheet.
   const FIXED_CATEGORIES = ['Rent', 'Utilities', 'Electricity', 'Wi-Fi', 'Mobile bill', 'Misc'];
   // Tags for Joint and Personal expenses (same list as Code.gs). Fixed bills are their own tag.
@@ -2288,9 +2288,10 @@
     }
 
     const rc = f.recap;
-    $('mRecapNote').textContent = rc && rc.on ? `Sending to ${rc.to.split(',').join(', ')} every Sunday evening.` :
-      'A short email every Sunday evening: spending vs last month, savings, goal and loan payments.';
-    $('recapBtn').textContent = rc && rc.on ? 'Change weekly email' : 'Set up weekly email';
+    renderRecapStatus(rc);
+    $('mRecapNote').textContent = rc && rc.on ? `Sending to ${rc.to.split(',').join(', ')} ${recapWhen(rc)}.` :
+      'A short email on the schedule you pick (daily, weekly, every 2 weeks or monthly): spending vs last month, savings, Fam, goal and loan payments.';
+    $('recapBtn').textContent = rc && rc.on ? 'Change email recap' : 'Set up email recap';
   }
 
   function renderMoneyRecent() {
@@ -2875,14 +2876,70 @@ if (ready && f.now.income.total > 0) {
   });
 
 
-  // ---- Weekly email (needs a connection: it changes the sheet's script settings directly)
+  // ---- Email recap (needs a connection: it changes the sheet's script settings directly).
+  // Daily, weekly, every 2 weeks or monthly, at a chosen hour (script version 26; older scripts send
+  // weekly on Sunday evening whatever is picked).
+  const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const hourText = (h) => `${h % 12 || 12} ${h < 12 ? 'AM' : 'PM'}`;
+  const ordinal = (n) => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
+  // "every Sunday around 6 PM", "on the 1st of each month around 8 AM"...
+  function recapWhen(rc) {
+    const freq = rc.freq || 'weekly';
+    const hour = rc.hour === undefined ? 18 : rc.hour;
+    const day = rc.day === undefined ? 0 : rc.day;
+    const at = `around ${hourText(hour)}`;
+    if (freq === 'daily') return `every day ${at}`;
+    if (freq === 'monthly') return `on the ${ordinal(day)} of each month ${at}`;
+    return `${freq === 'biweekly' ? 'every other' : 'every'} ${WEEKDAY_NAMES[day] || 'Sunday'} ${at}`;
+  }
+  // Whether it is working: last send (or its error), and a missing schedule.
+  function renderRecapStatus(rc) {
+    const el = $('mRecapStatus');
+    const parts = [];
+    let kind = '';
+    if (rc && rc.on && rc.triggers === 0) { parts.push('The schedule is missing in the script: tap Change email recap and Save.'); kind = 'open'; }
+    if (rc && rc.last && rc.last.at) {
+      const when = new Date(rc.last.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const what = rc.last.kind === 'test' ? 'test' : 'recap';
+      if (rc.last.ok) { parts.push(`Last ${what} sent ${when}.`); kind = kind || 'cleared'; }
+      else { parts.push(`Last ${what} failed ${when}: ${rc.last.error || 'unknown error'}`); kind = 'open'; }
+    } else if (rc && rc.on && rc.last === null) {
+      parts.push('Nothing sent yet. Use Save + send test to check it works.');
+    }
+    el.hidden = !parts.length;
+    el.textContent = parts.join(' ');
+    el.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
   const recapDialog = $('recapDialog');
+  for (let h = 0; h < 24; h++) $('recapHour').add(new Option(hourText(h), String(h)));
+  function setupRecapDay(freq, day) {
+    const field = $('recapDayField');
+    const select = $('recapDay');
+    field.hidden = freq === 'daily';
+    select.innerHTML = '';
+    if (freq === 'monthly') {
+      $('recapDayLabel').textContent = 'Day of month';
+      for (let d = 1; d <= 28; d++) select.add(new Option(ordinal(d), String(d)));
+      select.value = String(day >= 1 && day <= 28 ? day : 1);
+    } else {
+      $('recapDayLabel').textContent = 'Day';
+      WEEKDAY_NAMES.forEach((n, i) => select.add(new Option(n, String(i))));
+      select.value = String(day >= 0 && day <= 6 ? day : 0);
+    }
+  }
+  $('recapFreq').addEventListener('change', () => setupRecapDay($('recapFreq').value, $('recapFreq').value === 'monthly' ? 1 : 0));
   $('recapBtn').addEventListener('click', () => {
     $('recapForm').reset();
     clearInvalid($('recapForm'));
     const rc = fundsEstimate().recap;
     $('recapTo').value = rc && rc.to ? rc.to.split(',').join(', ') : '';
     $('recapOn').checked = rc ? rc.on || !rc.to : true;
+    const freq = (rc && rc.freq) || 'weekly';
+    $('recapFreq').value = freq;
+    setupRecapDay(freq, rc && rc.day !== undefined ? rc.day : freq === 'monthly' ? 1 : 0);
+    $('recapHour').value = String(rc && rc.hour !== undefined ? rc.hour : 18);
+    $('recapTz').textContent = rc && rc.tz ? `In ${rc.tz} (the script's time zone). Google sends it some time within that hour.` : 'Google sends it some time within that hour.';
     recapDialog.showModal();
   });
   $('recapForm').addEventListener('submit', async (e) => {
@@ -2894,12 +2951,22 @@ if (ready && f.now.income.total > 0) {
     if (on && !/@/.test(to)) return markInvalid($('recapTo'), 'Enter one or two email addresses.');
     const st = getState();
     if (st && st.version < 20) return showBanner(OUTDATED_MESSAGE, 'err', true);
+    const plan = { freq: $('recapFreq').value, day: Number($('recapDay').value || 0), hour: Number($('recapHour').value) };
     recapDialog.close();
     try {
-      const data = await call({ action: 'recap', on, to, test: action === 'test' });
+      const data = await call({ action: 'recap', on, to, test: action === 'test', ...plan });
       saveState(data);
       render();
-      showBanner(action === 'test' ? (data.recapSent ? 'Saved ✓ Test email sent' : 'Saved ✓') : on ? 'Weekly email on ✓ every Sunday evening' : 'Weekly email off', 'ok');
+      const old = (data.version || 0) < 26 && (plan.freq !== 'weekly' || plan.day !== 0 || plan.hour !== 18);
+      if (action === 'test' && data.recapError) {
+        showBanner(`Schedule saved, but the test email failed: ${data.recapError} In Apps Script, select weeklyRecap, click Run and approve the permissions, then try again.`, 'err', true);
+      } else if (old) {
+        showBanner('Saved, but the sheet\'s script is older than version 26, so it still sends weekly on Sunday evening. Paste the latest Code.gs and deploy a new version.', 'err', true);
+      } else {
+        const rc = (data.funds && data.funds.recap) || plan;
+        showBanner(action === 'test' ? (data.recapSent ? `Saved ✓ Test email sent to ${to}. Check spam if it is not in the inbox.` : 'Saved ✓')
+          : on ? `Email recap on ✓ ${recapWhen({ ...plan, ...rc })}` : 'Email recap off', 'ok');
+      }
     } catch (err) {
       showBanner(err.kind === 'network' ? 'Needs a connection. Try again when online.' : err.message, 'err', true);
     }
