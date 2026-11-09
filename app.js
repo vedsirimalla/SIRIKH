@@ -611,6 +611,9 @@
     $('moneyDash').hidden = !isMoney;
     $('homeDash').hidden = !isHome;
     $('typeField').hidden = !isHome;
+    // Home is only the summary and charts: adding and the Recent list live on each page.
+    $('expenseForm').hidden = isHome;
+    $('recentCard').hidden = isHome;
     fillTags(); // tags of your own learned from the sheet
     renderBalance();
     renderPersonalBudgets();
@@ -2382,9 +2385,15 @@ if (ready && f.now.income.total > 0) {
     const pbText = (b) => (b ? (b.remaining < 0 ? `${usd0(-b.remaining)} over` : `${usd0(b.remaining)} left`) : 'not set');
     tile('Personal', '#3b82f6', 'Personal', `V ${pb.V ? usd0(pb.V.remaining) : '—'} · K ${pb.K ? usd0(pb.K.remaining) : '—'}`, `V ${pbText(pb.V)}, K ${pbText(pb.K)}`,
       (pb.V && pb.V.remaining < 0) || (pb.K && pb.K.remaining < 0) ? 'neg' : '');
+    // Who owes whom: this month plus any earlier month still open (from the sheet), in one tile.
     const os = owedStatus(p);
-    tile('Joint', '#22c55e', 'Who owes whom', os.kind === 'open' ? settleText(os.remaining, -os.remaining) : os.kind === 'cleared' ? 'Cleared' : 'Even',
-      os.kind === 'open' ? 'Joint + Fixed + Personal, this month' : 'Nothing owed this month', os.kind === 'cleared' ? 'good' : '');
+    const older = (st.unsettled || []).filter((u) => u.month !== currentMonth());
+    const oweBits = [];
+    if (os.kind === 'open') oweBits.push(`${monthWord}: ${settleText(os.remaining, -os.remaining)}`);
+    for (const u of older) oweBits.push(`${u.label}: ${settleText(u.remaining, -u.remaining)}`);
+    const oweAll = round2((os.kind === 'open' ? os.remaining : 0) + older.reduce((t, u) => t + u.remaining, 0));
+    tile('Joint', '#22c55e', 'Who owes whom', oweBits.length ? (Math.abs(oweAll) < 0.01 ? 'Even overall' : settleText(oweAll, -oweAll)) : os.kind === 'cleared' ? 'Cleared' : 'Even',
+      oweBits.length ? oweBits.join(' · ') : 'Nothing owed', oweBits.length ? '' : 'good');
     const fxh = fixedShares(p);
     tile('Fixed', '#fb923c', 'Fixed bills', money(p.fixed), `${monthWord} · V's fixed ${money(fxh.fixedV)}, K's ${money(fxh.fixedK)}`);
     const c = st.car;

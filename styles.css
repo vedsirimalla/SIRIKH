@@ -490,3 +490,23 @@ dialog p { margin: 0 0 14px; }
 .chart .combo-line { fill: none; stroke: var(--text); stroke-width: 1.8; stroke-linejoin: round; pointer-events: none; }
 .chart .combo-dot { fill: var(--card); stroke: var(--text); stroke-width: 1.5; pointer-events: none; }
 .swatch.combo { height: 3px; border-radius: 2px; background: var(--text); }
+
+/* Keep everything inside the screen: grid items may shrink, long numbers wrap */
+main, .card, #homeDash { max-width: 100%; min-width: 0; }
+.tiles > *, .an-kpis > *, .charts > *, .an-filters > *, .donut-wrap > *, .grid2 > * { min-width: 0; }
+.tile .t-value, .kpi .k-value { overflow-wrap: anywhere; line-height: 1.2; }
+.tile .t-value { font-size: clamp(16px, 5vw, 20px); }
+.kpi .k-value { font-size: clamp(16px, 5vw, 20px); }
+.tile .t-sub, .kpi .k-sub, .readout, .chart-sum, .chart-sub, .tb-delta, .fr-sub { overflow-wrap: anywhere; }
+.chart { min-width: 0; max-width: 100%; }
+.chart svg { overflow: hidden; max-width: 100%; }
+.tb-head { min-width: 0; }
+.tb-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-amt { flex: none; }
+.donut-legend li { grid-template-columns: 10px minmax(0, 1fr) auto 34px; }
+.donut-legend .dl-name { overflow: hidden; text-overflow: ellipsis; }
+.an-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.an-table table.data { font-size: 12px; }
+.an-table th, .an-table td { white-space: nowrap; }
+@media (max-width: 380px) { .donut-wrap { grid-template-columns: 1fr; justify-items: center; } .donut-legend { width: 100%; } }
+
