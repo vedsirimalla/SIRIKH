@@ -1287,7 +1287,8 @@
     $('category').hidden = fixed;
     $('fixedPicker').hidden = !fixed;
     $('categoryField').hidden = car || moneyType;
-    $('tagField').hidden = !(type === 'Joint' || type === 'Personal');
+    // On Home the tag is picked for you from the category (no Tag field); change it on the Joint or Personal page.
+    $('tagField').hidden = !(type === 'Joint' || type === 'Personal') || view === 'Home';
     fillTags();
     updateTagNew();
     $('carFields').hidden = !car;
@@ -1567,6 +1568,7 @@
     }
     if (!category) return markInvalid($('category'), 'Enter where you spent it.');
     const tagged = type === 'Joint' || type === 'Personal';
+    if (tagged && $('tagField').hidden) $('tag').value = $('tag').value || suggestTag(category) || 'Other';
     if (tagged && !$('tag').value) return markInvalid($('tag'), 'Pick a tag (where the money went).');
     if (amount === null || amount === 0) return markInvalid($('amount'), 'Enter a valid amount.');
 
@@ -2424,8 +2426,79 @@ if (ready && f.now.income.total > 0) {
   // Series keep their color whatever the filter: Joint, Fixed, Personal V, Personal K, Sonata.
   const SERIES = ['Joint', 'Fixed', 'Personal V', 'Personal K', 'Sonata'];
   const SERIES_CLASS = { 'Joint': 's1', 'Fixed': 's2', 'Personal V': 's3', 'Personal K': 's4', 'Sonata': 's5' };
-  const AN_GROUPS = [['all', 'All'], ['Joint', 'Joint'], ['Fixed', 'Fixed'], ['Personal', 'Personal'],
-    ['Personal V', 'Personal V'], ['Personal K', 'Personal K'], ['Sonata', 'Sonata']];
+  const AN_GROUPS = [['all', 'All'], ['Joint', 'Joint'], ['Fixed', 'Fixed'], ['Personal', 'Personal'], ['Sonata', 'Sonata']];
+  const AN_WHO = { all: 'Combined', V: 'V', K: 'K' };
+  // One person's view: their own rows in full plus half of everything shared (Both), the same
+  // 50/50 split the budgets use. spend rows keep who at [3], funds rows at [2].
+  function shareOf(rows, who, at) {
+    if (who === 'all') return rows;
+    return rows.filter((r) => r[at] === who || r[at] === 'Both').map((r) => {
+      if (r[at] !== 'Both') return r;
+      const c = r.slice();
+      c[at] = who;
+      c[c.length - 1] = round2(r[r.length - 1] / 2);
+      return c;
+    });
+  }
+  const personShare = (rows, k, who) => round2(rows.filter((r) => r[0] === k && (r[3] === who || r[3] === 'Both'))
+    .reduce((t, r) => t + (r[3] === 'Both' ? r[4] / 2 : r[4]), 0));
+  // $1.2k style, for labels inside charts.
+  const usdK = (v) => {
+    const n = Math.abs(v);
+    const s = n >= 10000 ? Math.round(n / 1000) + 'k' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(Math.round(n));
+    return (v < 0 ? '-$' : '$') + s;
+  };
+  // A round top for the axis: 1, 2, 2.5 or 5 times a power of ten.
+  function niceCeil(v) {
+    if (v <= 0) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+    return 10 * p;
+  }
+  // Grid at $0, half and the top, labelled; returns the y scale.
+  function axisGrid(svg, max, L, R, T, B) {
+    const y = (v) => B - (Math.max(v, 0) / max) * (B - T);
+    for (const f of [0.5, 1]) {
+      svg.appendChild(svgEl('line', { x1: L, x2: R, y1: y(max * f), y2: y(max * f), class: 'grid' }));
+      svg.appendChild(svgEl('text', { x: L - 4, y: y(max * f) + 3, 'text-anchor': 'end', class: 'axis' }, usdK(max * f)));
+    }
+    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: B, y2: B, class: 'base' }));
+    svg.appendChild(svgEl('text', { x: L - 4, y: B + 3, 'text-anchor': 'end', class: 'axis' }, '$0'));
+    return y;
+  }
+  // Dashed average line, labelled at the right.
+  function avgLine(svg, avg, y, L, R) {
+    if (!(avg > 0)) return;
+    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: y(avg), y2: y(avg), class: 'avg' }));
+    svg.appendChild(svgEl('text', { x: R, y: y(avg) - 3, 'text-anchor': 'end', class: 'avg-label' }, `avg ${usdK(avg)}`));
+  }
+  // Change from the month before, as text: ▲ $120 (5%) vs Oct.
+  function momText(now, before, ym) {
+    if (!before || !now) return '';
+    const d = round2(now - before);
+    if (Math.abs(d) < 0.5) return `same as ${MON[Number(addMonths(ym, -1).slice(5, 7)) - 1]}`;
+    return `${d > 0 ? '▲' : '▼'} ${usd0(Math.abs(d))} (${Math.abs(Math.round((d / Math.abs(before)) * 100))}%) vs ${MON[Number(addMonths(ym, -1).slice(5, 7)) - 1]}`;
+  }
+  // One plain sentence about a run of months: highest, lowest, average, latest change.
+  function monthsSummary(keys, totals, cur) {
+    const have = keys.map((k, i) => [k, totals[i]]).filter(([, v]) => v > 0);
+    if (!have.length) return 'Nothing spent in these months.';
+    const full = have.filter(([k]) => k !== cur);
+    const pool = full.length ? full : have;
+    const hi = pool.reduce((m, x) => (x[1] > m[1] ? x : m));
+    const lo = pool.reduce((m, x) => (x[1] < m[1] ? x : m));
+    const avg = pool.reduce((t, x) => t + x[1], 0) / pool.length;
+    const parts = [`Average ${usd0(avg)} a month`];
+    if (pool.length > 1) parts.push(`highest ${ymLabelShort(hi[0])} (${usd0(hi[1])})`, `lowest ${ymLabelShort(lo[0])} (${usd0(lo[1])})`);
+    const last = keys.length - 1;
+    const ch = momText(totals[last], totals[last - 1], keys[last]);
+    if (ch) parts.push(`${MON[Number(keys[last].slice(5, 7)) - 1]}${keys[last] === cur ? ' so far' : ''} ${ch}`);
+    return parts.join(' · ') + (full.length < have.length ? '. This month is not finished, so it is left out of the average.' : '.');
+  }
+  function chartHead(fig, title, sub) {
+    fig.appendChild(el('figcaption', '', title));
+    if (sub) fig.appendChild(el('p', 'chart-sub', sub));
+  }
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const seriesOf = (row) => (row[1] === 'Personal' ? 'Personal ' + row[3] : row[1]);
   const ymLabelShort = (ym) => `${MON[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
@@ -2521,7 +2594,7 @@ if (ready && f.now.income.total > 0) {
   // Donut: share of each type in the period, total in the middle.
   function donut(title, parts, total) {
     const fig = el('figure', 'chart an-donut');
-    fig.appendChild(el('figcaption', '', title));
+    chartHead(fig, title, 'Share of the spending in this period by type.');
     const wrap = el('div', 'donut-wrap');
     const svg = svgEl('svg', { viewBox: '0 0 120 120', role: 'img', 'aria-label': title });
     const R = 50, r = 33, cx = 60, cy = 60;
@@ -2557,18 +2630,19 @@ if (ready && f.now.income.total > 0) {
   }
 
   // Stacked columns, one per month, by type. The selected month is outlined.
-  function stackedMonths(title, keys, rows, names, selected) {
+  function stackedMonths(title, keys, rows, names, selected, sub) {
     const fig = el('figure', 'chart');
-    fig.appendChild(el('figcaption', '', title));
+    chartHead(fig, title, sub);
     if (names.length > 1) fig.appendChild(legend(names));
-    const svg = svgEl('svg', { viewBox: '0 0 320 150', role: 'img', 'aria-label': title });
-    const L = 34, R = 316, T = 12, B = 124;
+    const svg = svgEl('svg', { viewBox: '0 0 320 160', role: 'img', 'aria-label': title });
+    const L = 34, R = 316, T = 14, B = 132;
     const totals = keys.map((k) => names.map((n) => sum(rows.filter((x) => x[0] === k && seriesOf(x) === n))));
-    const max = Math.max(1, ...totals.map((t) => t.reduce((a, b) => a + Math.max(b, 0), 0)));
-    const y = (v) => B - (v / max) * (B - T);
-    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: y(max), y2: y(max), class: 'grid' }));
-    svg.appendChild(svgEl('text', { x: L - 4, y: y(max) + 3, 'text-anchor': 'end', class: 'axis' }, usd0(max)));
-    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: B, y2: B, class: 'base' }));
+    const colTotal = totals.map((t) => round2(t.reduce((a2, b) => a2 + b, 0)));
+    const max = niceCeil(Math.max(1, ...totals.map((t) => t.reduce((a2, b) => a2 + Math.max(b, 0), 0))));
+    const y = axisGrid(svg, max, L, R, T, B);
+    const cur = currentMonth();
+    const done = keys.map((k, i) => [k, colTotal[i]]).filter(([k, v]) => v > 0 && k !== cur);
+    const avg = done.length ? done.reduce((t, x) => t + x[1], 0) / done.length : 0;
     const slot = (R - L) / keys.length;
     const w = Math.min(18, slot - 4);
     keys.forEach((k, i) => {
@@ -2584,27 +2658,88 @@ if (ready && f.now.income.total > 0) {
         top -= h;
         parts.push(`${n} ${usd0(v)}`);
       });
-      const total = round2(totals[i].reduce((a, b) => a + b, 0));
-      // A wide invisible target, bigger than the column.
+      const total = colTotal[i];
       g.insertBefore(svgEl('rect', { x: L + slot * i, y: T, width: slot, height: B - T, class: 'hit' }), g.firstChild);
       if (k === selected) g.appendChild(svgEl('rect', { x: x - 2, y: top - 2, width: w + 4, height: B - top + 2, rx: 3, class: 'sel-ring' }));
-      touch(g, fig, `${ymLabelShort(k)}: ${money(total)}${names.length > 1 && parts.length ? ' · ' + parts.join(', ') : ''}`);
+      const ch = i > 0 ? momText(total, colTotal[i - 1], k) : '';
+      touch(g, fig, `${ymLabelShort(k)}${k === cur ? ' (so far)' : ''}: ${money(total)}${ch ? ' · ' + ch : ''}${names.length > 1 && parts.length ? ' · ' + parts.join(', ') : ''}`);
       svg.appendChild(g);
+      if (total > 0 && keys.length <= 12) svg.appendChild(svgEl('text', { x: x + w / 2, y: top - 3, 'text-anchor': 'middle', class: 'col-val' }, usdK(total)));
       if (keys.length <= 12 || i % 2 === 0) {
-        svg.appendChild(svgEl('text', { x: x + w / 2, y: 140, 'text-anchor': 'middle', class: 'axis' + (k === selected ? ' axis-sel' : '') }, MON[Number(k.slice(5, 7)) - 1]));
+        svg.appendChild(svgEl('text', { x: x + w / 2, y: 148, 'text-anchor': 'middle', class: 'axis' + (k === selected ? ' axis-sel' : '') }, MON[Number(k.slice(5, 7)) - 1]));
       }
     });
+    avgLine(svg, avg, y, L, R);
     fig.appendChild(svg);
+    fig.appendChild(el('p', 'chart-sum', monthsSummary(keys, colTotal, cur)));
     const sel = keys.indexOf(selected) !== -1 ? selected : keys[keys.length - 1];
     const si = keys.indexOf(sel);
-    readout(fig, `${ymLabelShort(sel)}: ${money(round2(totals[si].reduce((a, b) => a + b, 0)))}. Tap a month for its breakdown.`);
+    readout(fig, `${ymLabelShort(sel)}: ${money(colTotal[si])}. Tap a month for its breakdown.`);
     return fig;
+  }
+
+  // V and K side by side each month, with the two together as a line.
+  function personMonths(title, keys, rows, selected) {
+    const fig = el('figure', 'chart');
+    chartHead(fig, title, 'Each bar is one person\'s share: what they spent for themselves plus half of everything shared. The line is the two together.');
+    const box = el('div', 'legend');
+    const item = (cls, text) => { const s = el('span', 'legend-item'); s.append(el('span', 'swatch ' + cls), document.createTextNode(text)); box.appendChild(s); };
+    item('s3', 'V');
+    item('s4', 'K');
+    item('combo', 'Combined');
+    fig.appendChild(box);
+    const svg = svgEl('svg', { viewBox: '0 0 320 160', role: 'img', 'aria-label': title });
+    const L = 34, R = 316, T = 14, B = 132;
+    const v = keys.map((k) => personShare(rows, k, 'V'));
+    const kk = keys.map((k) => personShare(rows, k, 'K'));
+    const c = keys.map((_, i) => round2(v[i] + kk[i]));
+    const max = niceCeil(Math.max(1, ...c));
+    const y = axisGrid(svg, max, L, R, T, B);
+    const slot = (R - L) / keys.length;
+    const w = Math.max(2, Math.min(9, (slot - 6) / 2));
+    const cx = (i) => L + slot * i + slot / 2;
+    const cur = currentMonth();
+    keys.forEach((k, i) => {
+      const g = svgEl('g', { class: 'col' + (k === selected ? ' sel' : '') });
+      g.appendChild(svgEl('rect', { x: L + slot * i, y: T, width: slot, height: B - T, class: 'hit' }));
+      if (v[i] > 0) g.appendChild(svgEl('rect', { x: cx(i) - w - 1, y: y(v[i]), width: w, height: Math.max(B - y(v[i]), 0.5), rx: 2, class: 'seg s3' }));
+      if (kk[i] > 0) g.appendChild(svgEl('rect', { x: cx(i) + 1, y: y(kk[i]), width: w, height: Math.max(B - y(kk[i]), 0.5), rx: 2, class: 'seg s4' }));
+      const ch = i > 0 ? momText(c[i], c[i - 1], k) : '';
+      touch(g, fig, `${ymLabelShort(k)}${k === cur ? ' (so far)' : ''}: V ${money(v[i])} · K ${money(kk[i])} · Combined ${money(c[i])}${ch ? ' · ' + ch : ''}`);
+      svg.appendChild(g);
+      if (keys.length <= 12 || i % 2 === 0) {
+        svg.appendChild(svgEl('text', { x: cx(i), y: 148, 'text-anchor': 'middle', class: 'axis' + (k === selected ? ' axis-sel' : '') }, MON[Number(k.slice(5, 7)) - 1]));
+      }
+    });
+    const pts = keys.map((_, i) => [cx(i), y(c[i])]);
+    if (pts.length > 1) svg.appendChild(svgEl('polyline', { points: pts.map((p) => p.join(',')).join(' '), class: 'combo-line' }));
+    pts.forEach(([px, py], i) => {
+      if (c[i] <= 0) return;
+      svg.appendChild(svgEl('circle', { cx: px, cy: py, r: 2.5, class: 'combo-dot' }));
+      if (keys.length <= 12) svg.appendChild(svgEl('text', { x: px, y: py - 5, 'text-anchor': 'middle', class: 'col-val' }, usdK(c[i])));
+    });
+    fig.appendChild(svg);
+    const tv = round2(v.reduce((t, x) => t + x, 0));
+    const tk = round2(kk.reduce((t, x) => t + x, 0));
+    const all = tv + tk;
+    const pct = (x) => (all > 0 ? Math.round((x / all) * 100) : 0);
+    const last = keys.length - 1;
+    const lines = [`Over these months: V ${usd0(tv)} (${pct(tv)}%) · K ${usd0(tk)} (${pct(tk)}%) · together ${usd0(all)}.`];
+    if (last > 0) {
+      const vc = momText(v[last], v[last - 1], keys[last]);
+      const kc = momText(kk[last], kk[last - 1], keys[last]);
+      if (vc || kc) lines.push(`${MON[Number(keys[last].slice(5, 7)) - 1]}${keys[last] === cur ? ' so far' : ''}: V ${vc || money(v[last])} · K ${kc || money(kk[last])}.`);
+    }
+    fig.appendChild(el('p', 'chart-sum', lines.join(' ')));
+    const sel = keys.indexOf(selected) !== -1 ? keys.indexOf(selected) : last;
+    readout(fig, `${ymLabelShort(keys[sel])}: V ${money(v[sel])} · K ${money(kk[sel])} · Combined ${money(c[sel])}. Tap a month.`);
+    return { fig, v, k: kk, c };
   }
 
   // This year against last year, month by month (two columns per month).
   function yearOverYear(title, year, rows, selectedMonth, lastMonth) {
     const fig = el('figure', 'chart');
-    fig.appendChild(el('figcaption', '', title));
+    chartHead(fig, title, 'Each month this year (left bar is last year) so you can see if the same month cost more or less.');
     const py = String(Number(year) - 1);
     const box = el('div', 'legend');
     const item = (cls, text) => { const s = el('span', 'legend-item'); s.append(el('span', 'swatch ' + cls), document.createTextNode(text)); box.appendChild(s); };
@@ -2617,11 +2752,8 @@ if (ready && f.now.income.total > 0) {
     const months = MON.map((_, i) => String(i + 1).padStart(2, '0'));
     const now = months.map((m) => (Number(m) <= lastMonth ? val(year, m) : null));
     const prev = months.map((m) => val(py, m));
-    const max = Math.max(1, ...now.filter((v) => v !== null), ...prev);
-    const y = (v) => B - (Math.max(v, 0) / max) * (B - T);
-    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: y(max), y2: y(max), class: 'grid' }));
-    svg.appendChild(svgEl('text', { x: L - 4, y: y(max) + 3, 'text-anchor': 'end', class: 'axis' }, usd0(max)));
-    svg.appendChild(svgEl('line', { x1: L, x2: R, y1: B, y2: B, class: 'base' }));
+    const max = niceCeil(Math.max(1, ...now.filter((v) => v !== null), ...prev));
+    const y = axisGrid(svg, max, L, R, T, B);
     const slot = (R - L) / 12;
     const w = Math.min(8, (slot - 4) / 2);
     months.forEach((m, i) => {
@@ -2641,6 +2773,10 @@ if (ready && f.now.income.total > 0) {
     const nowSame = round2(both.reduce((t, i) => t + now[i], 0));
     const prevSame = round2(both.reduce((t, i) => t + prev[i], 0));
     const span = both.length ? (both.length === 1 ? MON[both[0]] : `${MON[both[0]]} to ${MON[both[both.length - 1]]}`) : '';
+    if (both.length) {
+      const d = round2(nowSame - prevSame);
+      fig.appendChild(el('p', 'chart-sum', Math.abs(d) < 1 ? `${span}: ${year} is about the same as ${py}.` : `${span}: ${year} is ${usd0(Math.abs(d))} ${d >= 0 ? 'more' : 'less'} than ${py}${prevSame ? ` (${d >= 0 ? '+' : '-'}${Math.abs(Math.round((d / prevSame) * 100))}%)` : ''}.`));
+    }
     readout(fig, both.length
       ? `${span}: ${year} ${money(nowSame)} · ${py} ${money(prevSame)}. Tap a month to compare.`
       : 'Tap a month to compare.');
@@ -2661,10 +2797,17 @@ if (ready && f.now.income.total > 0) {
       return;
     }
     const cur = currentMonth();
-    const spendAll = a.spend || [];
-    const years = [...new Set(spendAll.map((r) => r[0].slice(0, 4)).concat(cur.slice(0, 4)))].sort().reverse();
-    if (!anFilter || (anFilter.year !== 'all' && !years.includes(anFilter.year))) anFilter = { year: cur.slice(0, 4), month: cur.slice(5, 7), group: 'all', table: false };
+    const rawSpend = a.spend || [];
+    const years = [...new Set(rawSpend.map((r) => r[0].slice(0, 4)).concat(cur.slice(0, 4)))].sort().reverse();
+    if (!anFilter || (anFilter.year !== 'all' && !years.includes(anFilter.year))) anFilter = { year: cur.slice(0, 4), month: cur.slice(5, 7), group: 'all', who: 'all', table: false };
+    // Older saved filters had Personal V and Personal K as groups; they are now the V and K views.
+    if (/^Personal [VK]$/.test(anFilter.group)) anFilter = { ...anFilter, who: anFilter.group.slice(-1), group: 'Personal' };
+    if (!AN_WHO[anFilter.who]) anFilter = { ...anFilter, who: 'all' };
     const f = anFilter;
+    const who = f.who;
+    const whoName = who === 'all' ? '' : `${who}'s `;
+    document.querySelectorAll('#anWho button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.who === who)));
+    const spendAll = shareOf(rawSpend, who, 3);
     const fill = (select, options, value) => {
       select.innerHTML = '';
       for (const [v, label] of options) { const o = document.createElement('option'); o.value = v; o.textContent = label; select.appendChild(o); }
@@ -2677,6 +2820,7 @@ if (ready && f.now.income.total > 0) {
     $('anTableBtn').textContent = f.table ? 'Charts' : 'Table';
 
     const spend = spendAll.filter((r) => groupMatches(r, f.group));
+    const rawGroup = rawSpend.filter((r) => groupMatches(r, f.group));
     const periods = anPeriods(f, cur, new Set(spendAll.map((r) => r[0])));
     const inMain = spend.filter((r) => periods.main.test(r[0]));
     const total = sum(inMain);
@@ -2695,15 +2839,22 @@ if (ready && f.now.income.total > 0) {
       kpis.appendChild(box);
     };
     const nowFor = (c) => (c.nowTest ? sum(spend.filter((r) => c.nowTest(r[0]))) : total);
-    kpi(`Spent · ${periods.main.label}`, money(total), periods.compare.map((c) => anDelta(nowFor(c), sum(spend.filter((r) => c.test(r[0]))), c.label)));
-    const funds = (a.funds || []).filter((r) => periods.main.test(r[0]));
+    kpi(`${who === 'all' ? 'Spent' : who + ' spent'} · ${periods.main.label}`, money(total), periods.compare.map((c) => anDelta(nowFor(c), sum(spend.filter((r) => c.test(r[0]))), c.label)));
+    const funds = shareOf(a.funds || [], who, 2).filter((r) => periods.main.test(r[0]));
     const income = sum(funds.filter((r) => r[1] === 'Income'));
     if (periods.days) kpi('Per day', money(total / periods.days), [{ text: `over ${periods.days} day${periods.days === 1 ? '' : 's'}` }]);
     else {
       const monthsWithData = new Set(inMain.map((r) => r[0])).size || 1;
       kpi('Per month', money(total / (periods.months || monthsWithData)), [{ text: `average of ${periods.months || monthsWithData} month${(periods.months || monthsWithData) === 1 ? '' : 's'}` }]);
     }
-    if (income > 0 && f.group === 'all') kpi('Income', money(income), [{ text: `${Math.round((total / income) * 100)}% of it spent` }]);
+    if (income > 0 && f.group === 'all') kpi(`${whoName}Income`, money(income), [{ text: `${Math.round((total / income) * 100)}% of it spent` }]);
+    if (who === 'all') {
+      const inRaw = rawGroup.filter((r) => periods.main.test(r[0]));
+      const months = [...new Set(inRaw.map((r) => r[0]))];
+      const sv = round2(months.reduce((t, k) => t + personShare(inRaw, k, 'V'), 0));
+      const sk = round2(months.reduce((t, k) => t + personShare(inRaw, k, 'K'), 0));
+      if (sv || sk) kpi('V · K', `${usd0(sv)} · ${usd0(sk)}`, [{ text: `each one's share · V ${sv + sk ? Math.round((sv / (sv + sk)) * 100) : 0}%, K ${sv + sk ? Math.round((sk / (sv + sk)) * 100) : 0}%` }]);
+    }
 
     // By tag: ranked, with the change against the first comparison period.
     const cmp = periods.compare[0];
@@ -2743,7 +2894,8 @@ if (ready && f.now.income.total > 0) {
     table.hidden = !f.table;
 
     const tagFig = el('figure', 'chart');
-    tagFig.appendChild(el('figcaption', '', `By tag · ${periods.main.label}${cmp ? ` (change ${cmp.label})` : ''}`));
+    chartHead(tagFig, `${whoName ? whoName + 'spending' : 'Spending'} by tag · ${periods.main.label}`,
+      `Where the money went, biggest first. The bar is the tag's amount; the % is its share of ${usd0(total)}${cmp ? `; the small line is the change ${cmp.label}` : ''}.`);
     const list = el('ul', 'tag-bars');
     if (!tags.length) list.appendChild(el('li', 'muted', 'Nothing spent in this period.'));
     for (const t of tags) {
@@ -2763,9 +2915,20 @@ if (ready && f.now.income.total > 0) {
       list.appendChild(li);
     }
     tagFig.appendChild(list);
+    if (tags.length > 3 && total > 0) {
+      const top = round2(tags.slice(0, 3).reduce((t, x) => t + tagTotals[x], 0));
+      tagFig.appendChild(el('p', 'chart-sum', `The top 3 (${tags.slice(0, 3).join(', ')}) are ${Math.round((top / total) * 100)}% of the spending.`));
+    }
     charts.appendChild(tagFig);
-    if (names.length > 1 && total > 0) charts.appendChild(donut(`By type · ${periods.main.label}`, parts, total));
-    charts.appendChild(stackedMonths(f.year !== 'all' && f.month === 'all' ? `Month by month · ${f.year}` : 'Month by month · last 12 months', keys, spend, names, selected));
+    if (names.length > 1 && total > 0) charts.appendChild(donut(`${whoName ? whoName + 'spending' : 'Spending'} by type · ${periods.main.label}`, parts, total));
+    const span = f.year !== 'all' && f.month === 'all' ? f.year : 'last 12 months';
+    let pm = null;
+    if (who === 'all') {
+      pm = personMonths(`V and K, month by month · ${span}`, keys, rawGroup, selected);
+      charts.appendChild(pm.fig);
+    }
+    charts.appendChild(stackedMonths(`${who === 'all' ? 'Combined' : who + ','} month by month · ${span}`, keys, spend, names, selected,
+      `Total spending each month${who === 'all' ? '' : ` for ${who} (own spending plus half of shared)`}, split by type. The number is the month's total; the dashed line is the average of finished months.`));
     if (hasLastYear) {
       const lastMonth = yoyYear === cur.slice(0, 4) ? Number(cur.slice(5, 7)) : 12;
       charts.appendChild(yearOverYear(`Year over year · ${yoyYear} vs ${Number(yoyYear) - 1}`, yoyYear, spend, f.month !== 'all' ? f.month : '', lastMonth));
@@ -2805,13 +2968,19 @@ if (ready && f.now.income.total > 0) {
     table.append(el('h3', '', `By tag · ${periods.main.label}`),
       mk(['Tag', 'Spent', 'Share'].concat(cmp ? [cmp.short] : []), tags.map((t) => [t, money(tagTotals[t]), `${total > 0 ? Math.round((tagTotals[t] / total) * 100) : 0}%`]
         .concat(cmp ? [money(tagBefore[t] || 0)] : []))));
-    table.append(el('h3', '', 'Month by month'),
+    if (pm) {
+      table.append(el('h3', '', 'V and K, month by month'),
+        mk(['Month', 'V', 'K', 'Combined', 'Change'], keys.map((k, i) => [ymLabelShort(k), money(pm.v[i]), money(pm.k[i]), money(pm.c[i]),
+          i > 0 && pm.c[i - 1] ? `${pm.c[i] >= pm.c[i - 1] ? '+' : '-'}${Math.abs(Math.round(((pm.c[i] - pm.c[i - 1]) / pm.c[i - 1]) * 100))}%` : '—']).reverse()));
+    }
+    table.append(el('h3', '', `${who === 'all' ? 'Combined' : who + ','} month by month`),
       mk(['Month'].concat(names.length > 1 ? names : [], ['Total']), keys.map((k) => {
         const per = names.map((n) => sum(spend.filter((r) => r[0] === k && seriesOf(r) === n)));
         return [ymLabelShort(k)].concat(names.length > 1 ? per.map(money) : [], [money(round2(per.reduce((x, y) => x + y, 0)))]);
       }).reverse()));
 
-    $('anNote').textContent = 'Spending is Joint, Fixed, Personal and Sonata. Refunds lower it; budgets and settlements are not spending. ' +
+    $('anNote').textContent = (who === 'all' ? '' : `${who} view: ${who}'s own spending plus half of everything shared (Joint, shared Fixed bills, shared car costs). `) +
+      'Spending is Joint, Fixed, Personal and Sonata. Refunds lower it; budgets and settlements are not spending. ' +
       'Change a tag from the pencil in Recent or in the Tag column of the month tab. Updates after each sync.';
   }
   const anChange = () => {
@@ -2820,6 +2989,13 @@ if (ready && f.now.income.total > 0) {
     renderAnalytics();
   };
   ['anYear', 'anMonth', 'anGroup'].forEach((id) => $(id).addEventListener('change', anChange));
+  $('anWho').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-who]');
+    if (!b) return;
+    anFilter = { ...(anFilter || {}), who: b.dataset.who };
+    store.set('an', anFilter);
+    renderAnalytics();
+  });
   $('anTableBtn').addEventListener('click', () => {
     anFilter = { ...(anFilter || {}), table: !(anFilter && anFilter.table) };
     store.set('an', anFilter);
